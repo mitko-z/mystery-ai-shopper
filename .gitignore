@@ -218,3 +218,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/.agents/skills/library-skills/.library-skills.json
+/.agents/skills/library-skills/SKILL.md
