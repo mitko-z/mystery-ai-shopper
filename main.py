@@ -1,12 +1,13 @@
-from shop.api import create_app
+from fastapi import FastAPI
 
-app = create_app()
+app = FastAPI(title="Mystery AI Shopper")
 
 
 @app.get("/")
 async def root():
-    """Health/landing message."""
-    return {"message": "Fake shop running. See /docs."}
+    """Landing message."""
+    return {"message": "Mystery AI Shopper is running. See /docs."}
+
 
 @app.get("/health")
 async def health():
