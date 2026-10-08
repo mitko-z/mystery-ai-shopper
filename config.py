@@ -2,15 +2,15 @@
 
 import os
 
-API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+API_KEY_ENV_VAR = "GEMINI_API_KEY"
 
 
 class MissingAPIKeyError(RuntimeError):
-    """Raised when the Anthropic API key is not set in the environment."""
+    """Raised when the GEMINI API key is not set in the environment."""
 
 
 def get_api_key() -> str:
-    """Return the Anthropic API key from the environment.
+    """Return the GEMINI API key from the environment.
 
     Returns:
         The key with surrounding whitespace removed.
