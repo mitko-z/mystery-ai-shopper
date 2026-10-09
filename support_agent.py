@@ -1,5 +1,15 @@
+from typing import Any, TypedDict
+
 from google import genai
 import config
+
+
+class AgentResponse(TypedDict):
+    """What the support agent produced for one prompt."""
+
+    text: str
+    tool_calls: list[dict[str, Any]]
+
 
 client = genai.Client(api_key=config.get_api_key())
 
@@ -45,8 +55,8 @@ refund_order_function = {
 }
 
 
-def run_support_agent(prompt: str) -> list[dict]:
-    """Send a customer prompt to the support agent and collect the tool calls it requests.
+def run_support_agent(prompt: str) -> AgentResponse:
+    """Send a customer prompt to the support agent and return its reply.
 
     The tools are not executed here; only the requested calls are returned.
 
@@ -54,8 +64,10 @@ def run_support_agent(prompt: str) -> list[dict]:
         prompt: The customer's message, e.g. "Where is my order O1001?".
 
     Returns:
-        A list of {"name": str, "arguments": dict}, one per `function_call`
-        step. Empty if the agent answered without calling any tool.
+        {"text": str, "tool_calls": list}. `text` is the agent's text reply
+        ("" if it produced none). `tool_calls` holds one {"name": str,
+        "arguments": dict} per `function_call` step, and is empty if the
+        agent replied without requesting any tool.
 
     Raises:
         ValueError: If the interaction response contains no steps.
@@ -84,4 +96,4 @@ def run_support_agent(prompt: str) -> list[dict]:
             })
 
     print(f"Tools to call: {tools_to_call}")
-    return tools_to_call
+    return {"text": interaction.output_text or "", "tool_calls": tools_to_call}
