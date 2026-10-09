@@ -55,7 +55,7 @@ refund_order_function = {
 }
 
 
-def run_support_agent(prompt: str) -> AgentResponse:
+async def run_support_agent(prompt: str) -> AgentResponse:
     """Send a customer prompt to the support agent and return its reply.
 
     The tools are not executed here; only the requested calls are returned.
@@ -72,7 +72,7 @@ def run_support_agent(prompt: str) -> AgentResponse:
     Raises:
         ValueError: If the interaction response contains no steps.
     """
-    interaction = client.interactions.create(
+    interaction = await client.aio.interactions.create(
         model="gemini-3.5-flash",
         input=prompt,
         system_instruction="you are a support agent for this shop; use the tools to answer",
