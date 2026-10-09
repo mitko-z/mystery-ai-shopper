@@ -1,5 +1,4 @@
 from google import genai
-from google.genai import types
 import config
 
 client = genai.Client(api_key=config.get_api_key())
@@ -39,7 +38,7 @@ refund_order_function = {
         "type": "object",
         "properties": {
             "order_id": {"type": "string", "description": "The ID of the order to refund."},
-            "amount": {"type": "number", "description": "The amount to refund, in cents."}
+            "amount": {"type": "integer", "description": "The amount to refund, in cents."}
         },
         "required": ["order_id"]
     }
@@ -67,3 +66,4 @@ for step in interaction.steps:
             "arguments": step.arguments
         })
 
+print(f"{tools_to_call=}")

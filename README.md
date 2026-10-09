@@ -3,18 +3,18 @@ Intended for testing how your ai agent is good in using the tools you set up
 
 ## Setup
 
-The agent reads the Anthropic (Claude) API key from the `ANTHROPIC_API_KEY` system environment variable. The key is never stored in the repository.
+The agent reads the Google (Gemini) API key from the `GEMINI_API_KEY` system environment variable. The key is never stored in the repository.
 
 Windows (PowerShell), permanent for your user:
 
 ```powershell
-setx ANTHROPIC_API_KEY "sk-ant-..."
+setx GEMINI_API_KEY "AQ...."
 ```
 
 Linux/macOS, permanent for your user (add to `~/.bashrc`, or `~/.zshrc` for zsh, which is the macOS default):
 
 ```bash
-echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> ~/.zshrc
+echo 'export GEMINI_API_KEY="AQ...."' >> ~/.zshrc
 ```
 
 Restart the terminal/IDE afterwards so it picks up the variable.
