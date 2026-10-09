@@ -45,25 +45,43 @@ refund_order_function = {
 }
 
 
-prompt = input("Enter your prompt: ")
-interaction = client.interactions.create(
-    model="gemini-3.5-flash",
-    input=prompt,
-    system_instruction="you are a support agent for this shop; use the tools to answer",
-    tools=[
-        get_order_function,
-        check_stock_function,
-        refund_order_function
-    ],
-)
+def run_support_agent(prompt: str) -> list[dict]:
+    """Send a customer prompt to the support agent and collect the tool calls it requests.
 
-tools_to_call = []
+    The tools are not executed here; only the requested calls are returned.
 
-for step in interaction.steps:
-    if step.type == "function_call":
-        tools_to_call.append({
-            "name": step.name,
-            "arguments": step.arguments
-        })
+    Args:
+        prompt: The customer's message, e.g. "Where is my order O1001?".
 
-print(f"{tools_to_call=}")
+    Returns:
+        A list of {"name": str, "arguments": dict}, one per `function_call`
+        step. Empty if the agent answered without calling any tool.
+
+    Raises:
+        ValueError: If the interaction response contains no steps.
+    """
+    interaction = client.interactions.create(
+        model="gemini-3.5-flash",
+        input=prompt,
+        system_instruction="you are a support agent for this shop; use the tools to answer",
+        tools=[
+            get_order_function,
+            check_stock_function,
+            refund_order_function
+        ],
+    )
+
+    if not interaction.steps:
+        raise ValueError("No steps found in the interaction response.")
+
+    tools_to_call = []
+
+    for step in interaction.steps:
+        if step.type == "function_call":
+            tools_to_call.append({
+                "name": step.name,
+                "arguments": step.arguments
+            })
+
+    print(f"Tools to call: {tools_to_call}")
+    return tools_to_call
