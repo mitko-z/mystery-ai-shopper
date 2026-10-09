@@ -23,6 +23,6 @@ def get_api_key() -> str:
     if not key:
         raise MissingAPIKeyError(
             f"Environment variable {API_KEY_ENV_VAR} is not set. "
-            "Set it to your Anthropic API key and restart the terminal/IDE."
+            "Set it to your Gemini API key and restart the terminal/IDE."
         )
     return key

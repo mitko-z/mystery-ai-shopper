@@ -1,17 +1,21 @@
-from typing import Any, TypedDict
+import functools
+from typing import Any
 
 from google import genai
 import config
 
 
-class AgentResponse(TypedDict):
-    """What the support agent produced for one prompt."""
+@functools.cache
+def _get_client() -> genai.Client:
+    """Create the Gemini client on first use, so importing this module needs no API key.
 
-    text: str
-    tool_calls: list[dict[str, Any]]
+    Returns:
+        The shared client, created once and reused.
 
-
-client = genai.Client(api_key=config.get_api_key())
+    Raises:
+        config.MissingAPIKeyError: If the API key is not set.
+    """
+    return genai.Client(api_key=config.get_api_key())
 
 
 get_order_function = {
@@ -55,26 +59,31 @@ refund_order_function = {
 }
 
 
-async def run_support_agent(prompt: str) -> AgentResponse:
-    """Send a customer prompt to the support agent and return its reply.
+async def run_turn(history: list[dict[str, Any]], user_message: str) -> None:
+    """Run one conversation turn with the support agent and record it in `history`.
 
-    The tools are not executed here; only the requested calls are returned.
+    `history` is the only output. The turn appends, in order, the user message
+    and every step the agent produced: `thought`, `function_call` and
+    `model_output`. The agent's text reply is the `model_output` step(s) at the
+    end, and the tools it wants are the `function_call` steps after the last
+    `user_input`. The tools are not executed here. Once they are, append a
+    `function_result` step for each call (matching its `id` as `call_id`)
+    before the next turn.
 
     Args:
-        prompt: The customer's message, e.g. "Where is my order O1001?".
-
-    Returns:
-        {"text": str, "tool_calls": list}. `text` is the agent's text reply
-        ("" if it produced none). `tool_calls` holds one {"name": str,
-        "arguments": dict} per `function_call` step, and is empty if the
-        agent replied without requesting any tool.
+        history: The conversation so far, as interaction steps. Appended to in
+            place, and left untouched if the turn fails. Pass an empty list to
+            start a conversation.
+        user_message: The customer's message, e.g. "Where is my order O1001?".
 
     Raises:
+        config.MissingAPIKeyError: If the API key is not set.
         ValueError: If the interaction response contains no steps.
     """
-    interaction = await client.aio.interactions.create(
+    user_step = {"type": "user_input", "content": [{"type": "text", "text": user_message}]}
+    interaction = await _get_client().aio.interactions.create(
         model="gemini-3.5-flash",
-        input=prompt,
+        input=[*history, user_step],
         system_instruction="you are a support agent for this shop; use the tools to answer",
         tools=[
             get_order_function,
@@ -86,14 +95,17 @@ async def run_support_agent(prompt: str) -> AgentResponse:
     if not interaction.steps:
         raise ValueError("No steps found in the interaction response.")
 
-    tools_to_call = []
+    new_steps = [
+        step.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for step in interaction.steps
+    ]
 
-    for step in interaction.steps:
-        if step.type == "function_call":
-            tools_to_call.append({
-                "name": step.name,
-                "arguments": step.arguments
-            })
+    history.append(user_step)
+    history.extend(new_steps)
 
+    tools_to_call = [
+        {"name": step["name"], "arguments": step["arguments"]}
+        for step in new_steps
+        if step["type"] == "function_call"
+    ]
     print(f"Tools to call: {tools_to_call}")
-    return {"text": interaction.output_text or "", "tool_calls": tools_to_call}
