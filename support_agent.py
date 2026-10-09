@@ -3,7 +3,7 @@ from typing import Any
 
 from google import genai
 import config
-
+import asyncio
 
 @functools.cache
 def _get_client() -> genai.Client:
@@ -109,3 +109,9 @@ async def run_turn(history: list[dict[str, Any]], user_message: str) -> None:
         if step["type"] == "function_call"
     ]
     print(f"Tools to call: {tools_to_call}")
+
+if __name__ == "__main__":
+    history = []
+    user_message = "Where is my order O1001?"
+    asyncio.run(run_turn(history, user_message))
+    print("Updated history:", history)
