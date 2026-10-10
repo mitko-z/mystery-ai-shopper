@@ -1,9 +1,13 @@
 import functools
 from typing import Any
+import sys
 
 from google import genai
+from google.genai import types
 import config
 import asyncio
+
+from shop import store
 
 @functools.cache
 def _get_client() -> genai.Client:
@@ -15,7 +19,19 @@ def _get_client() -> genai.Client:
     Raises:
         config.MissingAPIKeyError: If the API key is not set.
     """
-    return genai.Client(api_key=config.get_api_key())
+    # The SDK retries 429 by sleeping for the whole Retry-After header. With a
+    # daily quota that is hours, so the call looks hung. Leave 429 out of the
+    # retried codes so it raises at once, and bound every request.
+    return genai.Client(
+        api_key=config.get_api_key(),
+        http_options=types.HttpOptions(
+            timeout=60_000,
+            retry_options=types.HttpRetryOptions(
+                attempts=2,
+                http_status_codes=[500, 502, 503, 504],
+            ),
+        ),
+    )
 
 
 get_order_function = {
@@ -58,6 +74,7 @@ refund_order_function = {
     }
 }
 
+max_turns = 8 # max turns the agent can do before replying with a final answer
 
 async def run_turn(history: list[dict[str, Any]], user_message: str) -> None:
     """Run one conversation turn with the support agent and record it in `history`.
@@ -82,7 +99,7 @@ async def run_turn(history: list[dict[str, Any]], user_message: str) -> None:
     """
     user_step = {"type": "user_input", "content": [{"type": "text", "text": user_message}]}
     interaction = await _get_client().aio.interactions.create(
-        model="gemini-3.5-flash",
+        model="gemini-3.6-flash",
         input=[*history, user_step],
         system_instruction="you are a support agent for this shop; use the tools to answer",
         tools=[
@@ -110,8 +127,34 @@ async def run_turn(history: list[dict[str, Any]], user_message: str) -> None:
     ]
     print(f"Tools to call: {tools_to_call}")
 
+
+async def get_complete_reply(history: list[dict[str, Any]], new_message) -> str:
+    message = new_message
+    step = 0
+    while True:
+        if step >= max_turns:
+            text_response = "I'm sorry, I cannot provide a complete answer at this time. Please contact support."
+            history.append({"type": "model_output", "content": [{"type": "text", "text": text_response}]})
+            break
+        await run_turn(history, message)
+        last_step = history[-1]
+        if last_step.get("type") == "function_call":
+            if hasattr(store, last_step.get("name")):
+                tool = getattr(store, last_step.get("name"))
+                tool_result = await tool(**last_step.get("arguments", {}))
+                message = f"Tool result: {tool_result}"
+            else:
+                message = f"Tool {last_step.get('name')} not found."
+        elif last_step.get("type") == "model_output":
+            break
+        step += 1
+
 if __name__ == "__main__":
     history = []
-    user_message = "Where is my order O1001?"
-    asyncio.run(run_turn(history, user_message))
+    if len(sys.argv) > 1:
+        user_message = " ".join(sys.argv[1:])
+    else:
+        user_message = "Hi! I want my order O1001 to be fully refunded! I am not satisfied with the product at all."
+    print(f"User message: {user_message}")
+    asyncio.run(get_complete_reply(history, user_message))
     print("Updated history:", history)
