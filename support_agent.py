@@ -128,8 +128,18 @@ async def run_turn(history: list[dict[str, Any]], user_message: str) -> None:
     print(f"Tools to call: {tools_to_call}")
 
 
-async def get_complete_reply(history: list[dict[str, Any]], new_message) -> str:
-    message = new_message
+async def get_complete_reply(history: list[dict[str, Any]], user_message) -> None:
+    """
+    Run conversation turns until the agent produces a `model_output` step, or
+    until `max_turns` is reached. If the agent produces a `function_call`,
+    execute the tool and feed the result back to the agent in the next turn.
+
+    Args:
+        history: The conversation so far, as interaction steps. Appended to in
+            place, and left untouched if the turn fails.
+        user_message: The customer's message.
+    """
+    message = user_message
     step = 0
     while True:
         if step >= max_turns:
