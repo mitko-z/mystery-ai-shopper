@@ -164,10 +164,23 @@ async def _execute_call(call: dict[str, Any]) -> dict[str, Any]:
             result = {"ok": False, "error": str(e)}
     else:
         result = {"ok": False, "error": f"Tool {name} not found."}
+    return _function_result(call, result)
+
+
+def _function_result(call: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Build the `function_result` step that answers a `function_call` step.
+
+    Args:
+        call: The `function_call` step being answered.
+        result: The tool's result, `{"ok": True, ...}` or `{"ok": False, "error": ...}`.
+
+    Returns:
+        The `function_result` step, with `call_id` set to the call's `id`.
+    """
     return {
         "type": "function_result",
         "call_id": call.get("id"),
-        "name": name,
+        "name": call.get("name"),
         "result": json.dumps(result),
         "is_error": not result.get("ok", False),
     }
@@ -178,6 +191,9 @@ async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -
     until `MAX_TURNS` is reached. If the agent produces a `function_call`,
     execute the tool and feed the result back to the agent in the next turn.
 
+    On the last turn the agent cannot see another result, so tools it asks for
+    are not executed: each call is answered with an error result instead.
+
     Args:
         history: The conversation so far, as interaction steps. Append to it 
             in place.
@@ -187,7 +203,8 @@ async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -
         TurnLimitError: If the agent exceeds `MAX_TURNS` without producing a 
             final answer or if it fails to produce a valid turn.
     """
-    for _ in range(MAX_TURNS):
+    for turn in range(MAX_TURNS):
+        last_turn = turn == MAX_TURNS - 1
         try:
             await run_turn(history, user_message)
         except ValueError as e:
@@ -206,7 +223,14 @@ async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -
             if s.get("type") == "function_call" and s.get("id") not in answered
         ]
         for call in pending:
-            history.append(await _execute_call(call))
+            if last_turn:
+                # The agent would not get another turn to see the result, and the API
+                # cannot forbid tool calls, so do not run the tool. Answering the call
+                # keeps `history` valid and tells the agent it did not run.
+                result = {"ok": False, "error": "Not executed: the turn limit was reached."}
+                history.append(_function_result(call, result))
+            else:
+                history.append(await _execute_call(call))
     else:
         raise TurnLimitError(f"The agent could not provide a complete answer in {MAX_TURNS} turns. Please contact support.")
 
