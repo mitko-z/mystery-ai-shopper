@@ -95,9 +95,7 @@ async def run_turn(history: list[dict[str, Any]], user_message: Optional[str]) -
     and every step the agent produced: `thought`, `function_call` and
     `model_output`. The agent's text reply is the `model_output` step(s) at the
     end, and the tools it wants are the `function_call` steps after the last
-    `user_input`. The tools are not executed here. Once they are, append a
-    `function_result` step for each call (matching its `id` as `call_id`)
-    before the next turn.
+    `user_input`. The tools are not executed here.
 
     Args:
         history: The conversation so far, as interaction steps. Appended to in
