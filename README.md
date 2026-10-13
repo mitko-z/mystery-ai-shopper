@@ -27,6 +27,10 @@ uv run fastapi dev main.py
 
 The server listens on http://127.0.0.1:8000. Interactive docs are at http://127.0.0.1:8000/docs.
 
+## Demo chat page
+
+Open http://127.0.0.1:8000/ui for a simple browser chat with the support agent (`static/index.html`, a single file with no dependencies). It offers a few example questions, and "New conversation" starts a fresh `conversation_id`. The page calls `POST /chat` on the same origin, so it needs the server above to be running.
+
 ## Chat with the support agent
 
 `POST /chat` takes a JSON body with a `conversation_id` and a `message`, and returns the agent's reply:

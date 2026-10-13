@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mystery AI Shopper</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --border: #dfe2e8;
+    --text: #1d2330;
+    --muted: #6b7385;
+    --accent: #3b5bdb;
+    --accent-text: #ffffff;
+    --user-bg: #3b5bdb;
+    --user-text: #ffffff;
+    --agent-bg: #eef0f5;
+    --agent-text: #1d2330;
+    --error-bg: #fdecec;
+    --error-text: #a12626;
+    --code-bg: rgba(0, 0, 0, 0.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c;
+      --panel: #1a1e28;
+      --border: #2b3140;
+      --text: #e6e9f0;
+      --muted: #8e97ab;
+      --accent: #6c8cff;
+      --accent-text: #0e1220;
+      --user-bg: #4a6cf0;
+      --user-text: #ffffff;
+      --agent-bg: #262c3a;
+      --agent-text: #e6e9f0;
+      --error-bg: #3a1f22;
+      --error-text: #ff9b9b;
+      --code-bg: rgba(255, 255, 255, 0.1);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 760px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 12.5px; }
+  header .actions { display: flex; align-items: center; gap: 10px; }
+  .conv-id { color: var(--muted); font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+
+  button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    padding: 6px 12px;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .msg {
+    max-width: 82%;
+    padding: 9px 13px;
+    border-radius: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--user-text); border-bottom-right-radius: 4px; }
+  .msg.agent { align-self: flex-start; background: var(--agent-bg); color: var(--agent-text); border-bottom-left-radius: 4px; }
+  .msg.error { align-self: flex-start; background: var(--error-bg); color: var(--error-text); border-bottom-left-radius: 4px; }
+  .msg code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+
+  .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing span {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.2s infinite ease-in-out;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.15s; }
+  .typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+
+  .empty { margin: auto; text-align: center; color: var(--muted); max-width: 440px; }
+  .empty h2 { margin: 0 0 6px; color: var(--text); font-size: 18px; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+  .chip { border-radius: 999px; font-size: 13px; padding: 6px 14px; }
+
+  form {
+    display: flex;
+    gap: 10px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    max-height: 140px;
+    font: inherit;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+  }
+  #send { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; padding: 0 20px; }
+
+  @media (max-width: 560px) {
+    .conv-id { display: none; }
+    .msg { max-width: 92%; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>Mystery AI Shopper</h1>
+      <div class="sub">Support agent demo</div>
+    </div>
+    <div class="actions">
+      <span class="conv-id" id="convId"></span>
+      <button id="newChat" type="button">New conversation</button>
+    </div>
+  </header>
+
+  <div id="log" aria-live="polite"></div>
+
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Write a message…  (Enter to send, Shift+Enter for a new line)" maxlength="4000" aria-label="Message"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</div>
+
+<script>
+  // Same origin as the API when served by FastAPI at /ui. If this file is
+  // opened from disk instead, point it at the running server.
+  const API_BASE = location.protocol === "file:" ? "http://127.0.0.1:8000" : "";
+
+  const SUGGESTIONS = [
+    "Hi, I need help with an order.",
+    "What is the status of order O1002?",
+    "Is the Mechanical Keyboard (P2) in stock?",
+    "Order O1003 arrived but the keyboard is broken. Please refund the whole order.",
+    "Can I get a refund for order O1004?",
+  ];
+
+  const log = document.getElementById("log");
+  const form = document.getElementById("form");
+  const input = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+  const newChatBtn = document.getElementById("newChat");
+  const convIdEl = document.getElementById("convId");
+
+  let conversationId = newId();
+  let busy = false;
+
+  function newId() {
+    return "demo-" + Math.random().toString(36).slice(2, 10);
+  }
+
+  // Escape first, then allow only **bold**, `code` and "* " / "- " bullets.
+  function renderText(text) {
+    const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return esc
+      .replace(/^[ \t]*[*-] +/gm, "• ")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  }
+
+  function addMessage(kind, text) {
+    clearEmpty();
+    const el = document.createElement("div");
+    el.className = "msg " + kind;
+    if (kind === "agent") el.innerHTML = renderText(text);
+    else el.textContent = text;
+    log.appendChild(el);
+    scrollDown();
+    return el;
+  }
+
+  function addTyping() {
+    clearEmpty();
+    const el = document.createElement("div");
+    el.className = "msg agent";
+    el.innerHTML = '<span class="typing" aria-label="Agent is typing"><span></span><span></span><span></span></span>';
+    log.appendChild(el);
+    scrollDown();
+    return el;
+  }
+
+  function scrollDown() {
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function clearEmpty() {
+    const empty = log.querySelector(".empty");
+    if (empty) empty.remove();
+  }
+
+  function showEmpty() {
+    log.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "empty";
+    box.innerHTML = "<h2>Ask the support agent</h2><div>It can look up orders, check stock and issue refunds. Try one of these:</div>";
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    for (const s of SUGGESTIONS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip";
+      b.textContent = s;
+      b.addEventListener("click", () => send(s));
+      chips.appendChild(b);
+    }
+    box.appendChild(chips);
+    log.appendChild(box);
+  }
+
+  function setBusy(value) {
+    busy = value;
+    sendBtn.disabled = value;
+    newChatBtn.disabled = value;
+    input.disabled = value;
+    if (!value) input.focus();
+  }
+
+  function errorText(status, body) {
+    if (status === 422) return "The message was rejected (empty or too long).";
+    if (body && typeof body.detail === "string") return body.detail;
+    return "Request failed (HTTP " + status + ").";
+  }
+
+  async function send(message) {
+    message = message.trim();
+    if (!message || busy) return;
+
+    addMessage("user", message);
+    input.value = "";
+    autosize();
+    setBusy(true);
+    const typing = addTyping();
+
+    try {
+      const res = await fetch(API_BASE + "/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_id: conversationId, message }),
+      });
+      let body = null;
+      try { body = await res.json(); } catch { /* non-JSON error body */ }
+      typing.remove();
+      if (res.ok) addMessage("agent", body.reply);
+      else addMessage("error", errorText(res.status, body));
+    } catch {
+      typing.remove();
+      addMessage("error", "Cannot reach the server. Is it running?");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startConversation() {
+    conversationId = newId();
+    convIdEl.textContent = conversationId;
+    showEmpty();
+    input.focus();
+  }
+
+  function autosize() {
+    input.style.height = "auto";
+    // scrollHeight excludes the border, which border-box sizing counts.
+    const border = input.offsetHeight - input.clientHeight;
+    input.style.height = Math.min(input.scrollHeight + border, 140) + "px";
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    send(input.value);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      send(input.value);
+    }
+  });
+
+  input.addEventListener("input", autosize);
+  newChatBtn.addEventListener("click", startConversation);
+
+  startConversation();
+</script>
+</body>
+</html>

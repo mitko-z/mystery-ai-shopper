@@ -2,10 +2,12 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from itertools import takewhile
+from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from google.genai import errors as genai_errors
 from pydantic import BaseModel, StringConstraints
 
@@ -15,6 +17,8 @@ import support_agent
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Mystery AI Shopper")
+
+_UI_PAGE = Path(__file__).parent / "static" / "index.html"
 
 
 class ChatRequest(BaseModel):
@@ -70,7 +74,13 @@ def _final_reply(history: list[dict[str, Any]]) -> str:
 @app.get("/")
 async def root():
     """Landing message."""
-    return {"message": "Mystery AI Shopper is running. See /docs."}
+    return {"message": "Mystery AI Shopper is running. Chat at /ui, API docs at /docs."}
+
+
+@app.get("/ui", include_in_schema=False)
+async def ui() -> FileResponse:
+    """Serve the demo chat page."""
+    return FileResponse(_UI_PAGE)
 
 
 @app.get("/health")
