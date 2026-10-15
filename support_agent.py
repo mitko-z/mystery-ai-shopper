@@ -51,21 +51,30 @@ refund_order_function = {
     }
 }
 
-TOOLS = {
-    "get_order": store.get_order,
-    "check_stock": store.check_stock,
-    "refund_order": store.refund_order,
-}
-
 MAX_TURNS = 8 # max turns the agent can do before replying with a final answer
 
 class TurnLimitError(Exception):
     """Raised when the agent exceeds the maximum number of turns without producing a final answer."""
     pass
 
+def _tools_for(shop: store.Shop) -> dict[str, Any]:
+    """Build the tool definitions for the support agent, using the shop's methods.
+
+    Args:
+        shop: The shop instance whose methods are used as tools.
+
+    Returns:
+        A dictionary mapping tool names to their corresponding methods.
+    """
+    return {
+        "get_order": shop.get_order,
+        "check_stock": shop.check_stock,
+        "refund_order": shop.refund_order
+    }
+
 @functools.cache
 def _get_client() -> genai.Client:
-    """Create the Gemini client on first use, so importing this module needs 
+    """Create the Gemini client on first use, so importing this module needs
     no API key.
 
     Returns:
@@ -101,8 +110,8 @@ async def run_turn(history: list[dict[str, Any]], user_message: Optional[str]) -
         history: The conversation so far, as interaction steps. Appended to in
             place, and left untouched if the turn fails. Pass an empty list to
             start a conversation.
-        user_message: The customer's message, e.g. "Where is my order O1001?". 
-            If None, the turn is a follow-up to the previous turn and uses the last 
+        user_message: The customer's message, e.g. "Where is my order O1001?".
+            If None, the turn is a follow-up to the previous turn and uses the last
             tool result as input.
 
     Raises:
@@ -142,22 +151,24 @@ async def run_turn(history: list[dict[str, Any]], user_message: Optional[str]) -
     print(f"Tools to call: {tools_to_call}")
 
 
-async def _execute_call(call: dict[str, Any]) -> dict[str, Any]:
+async def _execute_call(shop: store.Shop, call: dict[str, Any]) -> dict[str, Any]:
     """Run the tool a `function_call` step asks for and build its `function_result` step.
 
     Never raises: an unknown tool or a tool that fails becomes an error result,
     so the agent sees what went wrong and can recover.
 
     Args:
+        shop: The shop instance to use for tool calls.
         call: A `function_call` step, with `id`, `name` and `arguments`.
 
     Returns:
         The `function_result` step, with `call_id` set to the call's `id`.
     """
     name = call.get("name")
-    if name in TOOLS:
+    tools = _tools_for(shop)
+    if name in tools:
         try:
-            result = await TOOLS[name](**call["arguments"])
+            result = await tools[name](**call["arguments"])
         except Exception as e:
             result = {"ok": False, "error": str(e)}
     else:
@@ -184,7 +195,7 @@ def _function_result(call: dict[str, Any], result: dict[str, Any]) -> dict[str, 
     }
 
 
-async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -> None:
+async def get_complete_reply(shop: store.Shop, history: list[dict[str, Any]], user_message: str) -> None:
     """Run conversation turns until the agent produces a `model_output` step, or
     until `MAX_TURNS` is reached. If the agent produces a `function_call`,
     execute the tool and feed the result back to the agent in the next turn.
@@ -193,12 +204,13 @@ async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -
     are not executed: each call is answered with an error result instead.
 
     Args:
-        history: The conversation so far, as interaction steps. Append to it 
+        shop: The shop instance to use for tool calls.
+        history: The conversation so far, as interaction steps. Append to it
             in place.
         user_message: The customer's message.
 
     Raises:
-        TurnLimitError: If the agent exceeds `MAX_TURNS` without producing a 
+        TurnLimitError: If the agent exceeds `MAX_TURNS` without producing a
             final answer or if it fails to produce a valid turn.
     """
     for turn in range(MAX_TURNS):
@@ -207,11 +219,11 @@ async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -
             await run_turn(history, user_message)
         except ValueError as e:
             raise TurnLimitError(f"Agent failed to produce a valid turn: {e}")
-        
+
         if history[-1].get("type") == "model_output":
             break
         user_message = None  # Only the first turn uses the user's message; subsequent turns use tool results.
-        
+
         # A call is pending until a `function_result` with its id is in `history`.
         # Deriving this from `history` keeps calls from earlier conversation turns
         # from running again.
@@ -228,7 +240,7 @@ async def get_complete_reply(history: list[dict[str, Any]], user_message: str) -
                 result = {"ok": False, "error": "Not executed: the turn limit was reached."}
                 history.append(_function_result(call, result))
             else:
-                history.append(await _execute_call(call))
+                history.append(await _execute_call(shop, call))
     else:
         raise TurnLimitError(f"The agent could not provide a complete answer in {MAX_TURNS} turns. Please contact support.")
 
@@ -239,5 +251,8 @@ if __name__ == "__main__":
     else:
         user_message = "Hi! I want my order O1001 to be fully refunded! I am not satisfied with the product at all."
     print(f"User message: {user_message}")
-    asyncio.run(get_complete_reply(history, user_message))
+
+    from shop import seed
+    asyncio.run(get_complete_reply(seed.get_seed_shop(), history, user_message))
+
     print("Updated history:", history)

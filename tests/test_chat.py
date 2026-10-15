@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -7,7 +8,6 @@ from google.genai import errors as genai_errors
 
 import config
 import main
-from shop import store
 from tests.test_support_agent import (
     FakeInteractions,
     FakeStep,
@@ -29,8 +29,7 @@ def anyio_backend():
 
 @pytest.fixture(autouse=True)
 def fresh_state():
-    """Reset the shop and the stored conversations before every test."""
-    store.reset()
+    """Forget the stored conversations before every test. A new one gets its own shop."""
     main._conversations.clear()
 
 
@@ -48,6 +47,11 @@ def use_model(monkeypatch, fake):
     The fake client only has `.aio`, so any use of the sync client fails the test.
     """
     use_fake(main.support_agent, monkeypatch, fake)
+
+
+def shop_of(conversation_id):
+    """The shop that belongs to a conversation the app has started."""
+    return main._conversations[conversation_id].shop
 
 
 def say(client, conversation_id, message):
@@ -100,14 +104,14 @@ async def test_three_turn_conversation_ends_in_a_refund(client, monkeypatch):
 
     first = await say(client, "demo", "I want a refund")
     second = await say(client, "demo", "It is O1001")
-    assert (await store.get_order("O1001"))["order"]["refunds"] == []
+    assert (await shop_of("demo").get_order("O1001"))["order"]["refunds"] == []
     third = await say(client, "demo", "Yes, refund it")
 
     assert [r.status_code for r in (first, second, third)] == [200, 200, 200]
     assert first.json() == {"conversation_id": "demo", "reply": "Which order is it about?"}
     assert second.json()["reply"] == "O1001 was delivered, 50.00 total. Refund it?"
     assert third.json()["reply"] == "Refunded 50.00."
-    assert (await store.get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
+    assert (await shop_of("demo").get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
     # The last model call saw the whole conversation, not only the last message.
     sent_users = [s for s in fake.calls[-1]["input"] if s["type"] == "user_input"]
     assert sent_users == [
@@ -126,6 +130,44 @@ async def test_conversations_do_not_share_history(client, monkeypatch):
     await say(client, "b", "I am B")
 
     assert fake.calls[1]["input"] == [user_step("I am B")]
+
+
+async def test_conversations_do_not_share_a_shop(client, monkeypatch):
+    """A refund in one conversation is not seen in another conversation's shop."""
+    fake = ScriptedInteractions(
+        [call_step("c1", "refund_order", {"order_id": "O1001"})],
+        [reply_step("Refunded 50.00.")],
+        [call_step("c2", "get_order", {"order_id": "O1001"})],
+        [reply_step("Nothing refunded on O1001.")],
+    )
+    use_model(monkeypatch, fake)
+
+    await say(client, "a", "refund O1001")
+    await say(client, "b", "what is the status of O1001?")
+
+    assert main._conversations["a"].shop is not main._conversations["b"].shop
+    assert (await shop_of("a").get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
+    assert (await shop_of("b").get_order("O1001"))["order"]["refunds"] == []
+    # What the agent of conversation b was told by its own tool call.
+    seen_by_b = json.loads(fake.calls[3]["input"][-1]["result"])
+    assert seen_by_b["order"]["refunded"] == 0
+
+
+async def test_one_conversation_keeps_its_shop_between_messages(client, monkeypatch):
+    """A refund made on one message is still there on the next message of that conversation."""
+    fake = ScriptedInteractions(
+        [call_step("c1", "refund_order", {"order_id": "O1001"})],
+        [reply_step("Refunded 50.00.")],
+        [call_step("c2", "get_order", {"order_id": "O1001"})],
+        [reply_step("It is fully refunded.")],
+    )
+    use_model(monkeypatch, fake)
+
+    await say(client, "demo", "refund O1001")
+    await say(client, "demo", "is O1001 refunded?")
+
+    seen = json.loads(fake.calls[3]["input"][-1]["result"])
+    assert seen["order"]["refunded"] == 5000
 
 
 async def test_reply_is_the_final_text_only(client, monkeypatch):

@@ -12,6 +12,8 @@ from google.genai import errors as genai_errors
 from pydantic import BaseModel, StringConstraints
 
 import config
+from shop import seed
+from shop.store import Shop
 import support_agent
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ class Conversation:
     """A conversation's `history` and the lock that serialises its turns."""
 
     history: list[dict[str, Any]] = field(default_factory=list)
+    shop: Shop = field(default_factory=seed.get_seed_shop)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -103,10 +106,12 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             configured. After a failure the conversation is kept, so the
             customer can write again.
     """
-    conversation = _conversations.setdefault(payload.conversation_id, Conversation())
+    conversation = _conversations.get(payload.conversation_id)
+    if conversation is None:
+        conversation = _conversations[payload.conversation_id] = Conversation()
     async with conversation.lock:
         try:
-            await support_agent.get_complete_reply(conversation.history, payload.message)
+            await support_agent.get_complete_reply(conversation.shop, conversation.history, payload.message)
         except config.MissingAPIKeyError:
             logger.exception("The Gemini API key is not configured")
             raise HTTPException(status_code=503, detail="The support agent is not configured.")

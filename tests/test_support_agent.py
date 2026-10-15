@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 import config
-from shop import store
 
 pytestmark = pytest.mark.anyio
 
@@ -23,12 +22,6 @@ def agent(monkeypatch):
     monkeypatch.delenv(config.API_KEY_ENV_VAR, raising=False)
     sys.modules.pop("support_agent", None)
     return importlib.import_module("support_agent")
-
-
-@pytest.fixture(autouse=True)
-def fresh_store():
-    """Reset the in-memory shop before every test, since tool calls change it."""
-    store.reset()
 
 
 class FakeStep:
@@ -166,7 +159,7 @@ async def test_history_untouched_when_response_has_no_steps(agent, monkeypatch):
 
 # --- get_complete_reply ---
 
-async def test_tool_result_is_sent_back_to_the_model(agent, monkeypatch):
+async def test_tool_result_is_sent_back_to_the_model(agent, shop, monkeypatch):
     """A requested tool runs, and the model sees its result on the next turn."""
     fake = ScriptedInteractions(
         [call_step("c1", "check_stock", {"product_id": "P1"})],
@@ -175,7 +168,7 @@ async def test_tool_result_is_sent_back_to_the_model(agent, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(history, "stock of P1?")
+    await agent.get_complete_reply(shop, history, "stock of P1?")
 
     result = result_of(history, "c1")
     assert result["is_error"] is False
@@ -187,7 +180,7 @@ async def test_tool_result_is_sent_back_to_the_model(agent, monkeypatch):
     assert sent_users == [user_step("stock of P1?")]
 
 
-async def test_every_call_of_a_turn_is_answered(agent, monkeypatch):
+async def test_every_call_of_a_turn_is_answered(agent, shop, monkeypatch):
     """Parallel calls in one turn each get a result, after all the calls."""
     fake = ScriptedInteractions(
         [call_step("c1", "get_order", {"order_id": "O1001"}),
@@ -197,7 +190,7 @@ async def test_every_call_of_a_turn_is_answered(agent, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(history, "order O1001 and stock of P1?")
+    await agent.get_complete_reply(shop, history, "order O1001 and stock of P1?")
 
     assert [s["type"] for s in history] == [
         "user_input", "function_call", "function_call",
@@ -209,13 +202,13 @@ async def test_every_call_of_a_turn_is_answered(agent, monkeypatch):
 
 # --- unknown tools and bad arguments ---
 
-@pytest.mark.parametrize("name", ["no_such_tool", "reset"])
-async def test_unknown_tool_gets_an_error_result(agent, monkeypatch, name):
+@pytest.mark.parametrize("name", ["no_such_tool", "_view"])
+async def test_unknown_tool_gets_an_error_result(agent, shop, monkeypatch, name):
     """A tool outside the tool list is not run; the model is told, and the loop goes on.
 
-    `reset` exists in the store module but is not a tool, so it must not be callable.
+    `_view` exists on the shop but is not a tool, so it must not be callable.
     """
-    await store.refund_order("O1001", 100)
+    await shop.refund_order("O1001", 100)
     fake = ScriptedInteractions(
         [call_step("c1", name, {})],
         [reply_step("I cannot do that.")],
@@ -223,14 +216,14 @@ async def test_unknown_tool_gets_an_error_result(agent, monkeypatch, name):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(history, "do something odd")
+    await agent.get_complete_reply(shop, history, "do something odd")
 
     result = result_of(history, "c1")
     assert result["is_error"] is True
     assert name in json.loads(result["result"])["error"]
     assert fake.calls[1]["input"][-1] == result
     assert history[-1] == reply_step("I cannot do that.")
-    assert (await store.get_order("O1001"))["order"]["refunded"] == 100
+    assert (await shop.get_order("O1001"))["order"]["refunded"] == 100
 
 
 @pytest.mark.parametrize(
@@ -241,7 +234,7 @@ async def test_unknown_tool_gets_an_error_result(agent, monkeypatch, name):
     ],
     ids=["missing-argument", "unexpected-argument"],
 )
-async def test_bad_arguments_get_an_error_result(agent, monkeypatch, arguments, mentioned):
+async def test_bad_arguments_get_an_error_result(agent, shop, monkeypatch, arguments, mentioned):
     """A tool called with wrong arguments reports the error to the model instead of crashing."""
     fake = ScriptedInteractions(
         [call_step("c1", "get_order", arguments)],
@@ -250,7 +243,7 @@ async def test_bad_arguments_get_an_error_result(agent, monkeypatch, arguments, 
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(history, "where is my order?")
+    await agent.get_complete_reply(shop, history, "where is my order?")
 
     result = result_of(history, "c1")
     assert result["is_error"] is True
@@ -262,7 +255,7 @@ async def test_bad_arguments_get_an_error_result(agent, monkeypatch, arguments, 
 
 # --- turn limit ---
 
-async def test_tools_are_not_run_on_the_last_turn(agent, monkeypatch):
+async def test_tools_are_not_run_on_the_last_turn(agent, shop, monkeypatch):
     """Calls requested on the last turn are refused, not run, and the limit error is raised."""
     monkeypatch.setattr(agent, "MAX_TURNS", 3)
     fake = ScriptedInteractions(
@@ -274,10 +267,10 @@ async def test_tools_are_not_run_on_the_last_turn(agent, monkeypatch):
     history = []
 
     with pytest.raises(agent.TurnLimitError):
-        await agent.get_complete_reply(history, "refund O1001")
+        await agent.get_complete_reply(shop, history, "refund O1001")
 
     assert len(fake.calls) == 3
-    assert (await store.get_order("O1001"))["order"]["refunds"] == []
+    assert (await shop.get_order("O1001"))["order"]["refunds"] == []
     refused = result_of(history, "c3")
     assert refused["is_error"] is True
     assert "Not executed" in json.loads(refused["result"])["error"]
@@ -286,7 +279,7 @@ async def test_tools_are_not_run_on_the_last_turn(agent, monkeypatch):
     assert result_of(history, "c2")["is_error"] is False
 
 
-async def test_history_stays_valid_after_the_limit(agent, monkeypatch):
+async def test_history_stays_valid_after_the_limit(agent, shop, monkeypatch):
     """After the limit error every call has exactly one result, so the history can be reused."""
     monkeypatch.setattr(agent, "MAX_TURNS", 2)
     fake = ScriptedInteractions(
@@ -297,7 +290,7 @@ async def test_history_stays_valid_after_the_limit(agent, monkeypatch):
     history = []
 
     with pytest.raises(agent.TurnLimitError):
-        await agent.get_complete_reply(history, "where is my order?")
+        await agent.get_complete_reply(shop, history, "where is my order?")
 
     call_ids = [s["id"] for s in history if s["type"] == "function_call"]
     result_ids = [s["call_id"] for s in history if s["type"] == "function_result"]
@@ -305,7 +298,7 @@ async def test_history_stays_valid_after_the_limit(agent, monkeypatch):
     assert history[-1]["type"] == "function_result"
 
 
-async def test_tools_run_on_the_turn_before_the_last(agent, monkeypatch):
+async def test_tools_run_on_the_turn_before_the_last(agent, shop, monkeypatch):
     """A call on the turn before the last still runs, because the model gets one more turn to report it."""
     monkeypatch.setattr(agent, "MAX_TURNS", 3)
     fake = ScriptedInteractions(
@@ -316,16 +309,16 @@ async def test_tools_run_on_the_turn_before_the_last(agent, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(history, "refund O1001")
+    await agent.get_complete_reply(shop, history, "refund O1001")
 
-    assert (await store.get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
+    assert (await shop.get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
     assert result_of(history, "c2")["is_error"] is False
     assert history[-1] == reply_step("Your order is refunded.")
 
 
 # --- earlier calls ---
 
-async def test_calls_from_earlier_turns_are_not_run_again(agent, monkeypatch):
+async def test_calls_from_earlier_turns_are_not_run_again(agent, shop, monkeypatch):
     """A second customer message on the same history does not repeat the first one's tool calls."""
     fake = ScriptedInteractions(
         [call_step("c1", "refund_order", {"order_id": "O1001", "amount": 1000})],
@@ -336,10 +329,10 @@ async def test_calls_from_earlier_turns_are_not_run_again(agent, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(history, "refund 10.00 of O1001")
-    await agent.get_complete_reply(history, "what is the status of O1001?")
+    await agent.get_complete_reply(shop, history, "refund 10.00 of O1001")
+    await agent.get_complete_reply(shop, history, "what is the status of O1001?")
 
-    assert (await store.get_order("O1001"))["order"]["refunds"] == [{"amount": 1000}]
+    assert (await shop.get_order("O1001"))["order"]["refunds"] == [{"amount": 1000}]
     result_ids = [s["call_id"] for s in history if s["type"] == "function_result"]
     assert result_ids == ["c1", "c2"]
     assert history[-1] == reply_step("It was delivered.")
