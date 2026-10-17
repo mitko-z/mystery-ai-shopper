@@ -9,6 +9,7 @@ import config
 import asyncio
 
 from shop import store
+from app_types import Tools, Step, History
 
 
 get_order_function = {
@@ -57,7 +58,7 @@ class TurnLimitError(Exception):
     """Raised when the agent exceeds the maximum number of turns without producing a final answer."""
     pass
 
-def _tools_for(shop: store.Shop) -> dict[str, Any]:
+def tools_for(shop: store.Shop) -> Tools:
     """Build the tool definitions for the support agent, using the shop's methods.
 
     Args:
@@ -97,7 +98,7 @@ def _get_client() -> genai.Client:
         ),
     )
 
-async def run_turn(history: list[dict[str, Any]], user_message: Optional[str]) -> None:
+async def run_turn(history: History, user_message: Optional[str]) -> None:
     """Run one conversation turn with the support agent and record it in `history`.
 
     `history` is the only output. The turn appends, in order, the user message
@@ -151,21 +152,22 @@ async def run_turn(history: list[dict[str, Any]], user_message: Optional[str]) -
     print(f"Tools to call: {tools_to_call}")
 
 
-async def _execute_call(shop: store.Shop, call: dict[str, Any]) -> dict[str, Any]:
+async def _execute_call(
+    tools: Tools, call: dict[str, Any]
+) -> Step:
     """Run the tool a `function_call` step asks for and build its `function_result` step.
 
     Never raises: an unknown tool or a tool that fails becomes an error result,
     so the agent sees what went wrong and can recover.
 
     Args:
-        shop: The shop instance to use for tool calls.
+        tools: A dictionary of available tools.
         call: A `function_call` step, with `id`, `name` and `arguments`.
 
     Returns:
         The `function_result` step, with `call_id` set to the call's `id`.
     """
     name = call.get("name")
-    tools = _tools_for(shop)
     if name in tools:
         try:
             result = await tools[name](**call["arguments"])
@@ -176,7 +178,7 @@ async def _execute_call(shop: store.Shop, call: dict[str, Any]) -> dict[str, Any
     return _function_result(call, result)
 
 
-def _function_result(call: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+def _function_result(call: dict[str, Any], result: dict[str, Any]) -> Step:
     """Build the `function_result` step that answers a `function_call` step.
 
     Args:
@@ -195,7 +197,10 @@ def _function_result(call: dict[str, Any], result: dict[str, Any]) -> dict[str, 
     }
 
 
-async def get_complete_reply(shop: store.Shop, history: list[dict[str, Any]], user_message: str) -> None:
+async def get_complete_reply(
+        tools: Tools,
+        history: History,
+        user_message: str) -> None:
     """Run conversation turns until the agent produces a `model_output` step, or
     until `MAX_TURNS` is reached. If the agent produces a `function_call`,
     execute the tool and feed the result back to the agent in the next turn.
@@ -204,7 +209,7 @@ async def get_complete_reply(shop: store.Shop, history: list[dict[str, Any]], us
     are not executed: each call is answered with an error result instead.
 
     Args:
-        shop: The shop instance to use for tool calls.
+        tools: A dictionary of available tools.
         history: The conversation so far, as interaction steps. Append to it
             in place.
         user_message: The customer's message.
@@ -240,7 +245,7 @@ async def get_complete_reply(shop: store.Shop, history: list[dict[str, Any]], us
                 result = {"ok": False, "error": "Not executed: the turn limit was reached."}
                 history.append(_function_result(call, result))
             else:
-                history.append(await _execute_call(shop, call))
+                history.append(await _execute_call(tools, call))
     else:
         raise TurnLimitError(f"The agent could not provide a complete answer in {MAX_TURNS} turns. Please contact support.")
 
@@ -253,6 +258,6 @@ if __name__ == "__main__":
     print(f"User message: {user_message}")
 
     from shop import seed
-    asyncio.run(get_complete_reply(seed.get_seed_shop(), history, user_message))
+    asyncio.run(get_complete_reply(tools_for(seed.get_seed_shop()), history, user_message))
 
     print("Updated history:", history)

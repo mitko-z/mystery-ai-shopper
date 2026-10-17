@@ -170,6 +170,61 @@ async def test_one_conversation_keeps_its_shop_between_messages(client, monkeypa
     assert seen["order"]["refunded"] == 5000
 
 
+async def test_tool_calls_of_a_conversation_are_logged(client, monkeypatch):
+    """After a conversation the log lists every tool call the agent made, in order."""
+    fake = ScriptedInteractions(
+        [reply_step("Which order is it about?")],
+        [call_step("c1", "get_order", {"order_id": "O1001"})],
+        [reply_step("O1001 was delivered, 50.00 total. Refund it?")],
+        [call_step("c2", "refund_order", {"order_id": "O1001"})],
+        [reply_step("Refunded 50.00.")],
+    )
+    use_model(monkeypatch, fake)
+
+    await say(client, "demo", "I want a refund")
+    await say(client, "demo", "It is O1001")
+    await say(client, "demo", "Yes, refund it")
+
+    log = main._conversations["demo"].tool_calls
+    assert [(call.name, call.arguments) for call in log] == [
+        ("get_order", {"order_id": "O1001"}),
+        ("refund_order", {"order_id": "O1001"}),
+    ]
+    assert log[0].result["ok"] is True
+    assert log[0].result["order"]["refundable"] == 5000
+    assert log[1].result["ok"] is True
+    assert log[1].result["refunded_amount"] == 5000
+    assert [call.error for call in log] == [None, None]
+    assert log[0].started_at <= log[1].started_at
+    assert all(call.duration >= 0 for call in log)
+
+
+async def test_conversations_have_their_own_tool_call_log(client, monkeypatch):
+    """A tool call in one conversation is not in another conversation's log."""
+    fake = ScriptedInteractions(
+        [call_step("c1", "refund_order", {"order_id": "O1001"})],
+        [reply_step("Refunded 50.00.")],
+        [call_step("c2", "get_order", {"order_id": "O1001"})],
+        [reply_step("Nothing refunded on O1001.")],
+    )
+    use_model(monkeypatch, fake)
+
+    await say(client, "a", "refund O1001")
+    await say(client, "b", "what is the status of O1001?")
+
+    assert [call.name for call in main._conversations["a"].tool_calls] == ["refund_order"]
+    assert [call.name for call in main._conversations["b"].tool_calls] == ["get_order"]
+
+
+async def test_conversation_without_tool_calls_has_an_empty_log(client, monkeypatch):
+    """A conversation where the agent only talks leaves the log empty."""
+    use_model(monkeypatch, ScriptedInteractions([reply_step("Hello!")]))
+
+    await say(client, "demo", "hi")
+
+    assert main._conversations["demo"].tool_calls == []
+
+
 async def test_reply_is_the_final_text_only(client, monkeypatch):
     """Thoughts, tool calls and tool results of the turn are not returned."""
     fake = ScriptedInteractions(

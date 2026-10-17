@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 import config
+from shop import seed
+from tool_recorder import recording
 
 pytestmark = pytest.mark.anyio
 
@@ -168,7 +170,7 @@ async def test_tool_result_is_sent_back_to_the_model(agent, shop, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(shop, history, "stock of P1?")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "stock of P1?")
 
     result = result_of(history, "c1")
     assert result["is_error"] is False
@@ -190,7 +192,7 @@ async def test_every_call_of_a_turn_is_answered(agent, shop, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(shop, history, "order O1001 and stock of P1?")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "order O1001 and stock of P1?")
 
     assert [s["type"] for s in history] == [
         "user_input", "function_call", "function_call",
@@ -216,7 +218,7 @@ async def test_unknown_tool_gets_an_error_result(agent, shop, monkeypatch, name)
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(shop, history, "do something odd")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "do something odd")
 
     result = result_of(history, "c1")
     assert result["is_error"] is True
@@ -243,7 +245,7 @@ async def test_bad_arguments_get_an_error_result(agent, shop, monkeypatch, argum
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(shop, history, "where is my order?")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "where is my order?")
 
     result = result_of(history, "c1")
     assert result["is_error"] is True
@@ -267,7 +269,7 @@ async def test_tools_are_not_run_on_the_last_turn(agent, shop, monkeypatch):
     history = []
 
     with pytest.raises(agent.TurnLimitError):
-        await agent.get_complete_reply(shop, history, "refund O1001")
+        await agent.get_complete_reply(agent.tools_for(shop), history, "refund O1001")
 
     assert len(fake.calls) == 3
     assert (await shop.get_order("O1001"))["order"]["refunds"] == []
@@ -290,7 +292,7 @@ async def test_history_stays_valid_after_the_limit(agent, shop, monkeypatch):
     history = []
 
     with pytest.raises(agent.TurnLimitError):
-        await agent.get_complete_reply(shop, history, "where is my order?")
+        await agent.get_complete_reply(agent.tools_for(shop), history, "where is my order?")
 
     call_ids = [s["id"] for s in history if s["type"] == "function_call"]
     result_ids = [s["call_id"] for s in history if s["type"] == "function_result"]
@@ -309,7 +311,7 @@ async def test_tools_run_on_the_turn_before_the_last(agent, shop, monkeypatch):
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(shop, history, "refund O1001")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "refund O1001")
 
     assert (await shop.get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
     assert result_of(history, "c2")["is_error"] is False
@@ -329,10 +331,84 @@ async def test_calls_from_earlier_turns_are_not_run_again(agent, shop, monkeypat
     use_fake(agent, monkeypatch, fake)
     history = []
 
-    await agent.get_complete_reply(shop, history, "refund 10.00 of O1001")
-    await agent.get_complete_reply(shop, history, "what is the status of O1001?")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "refund 10.00 of O1001")
+    await agent.get_complete_reply(agent.tools_for(shop), history, "what is the status of O1001?")
 
     assert (await shop.get_order("O1001"))["order"]["refunds"] == [{"amount": 1000}]
     result_ids = [s["call_id"] for s in history if s["type"] == "function_result"]
     assert result_ids == ["c1", "c2"]
     assert history[-1] == reply_step("It was delivered.")
+
+
+# --- call log ---
+
+async def test_failed_call_is_logged_with_its_error(agent, shop, monkeypatch):
+    """A call with wrong arguments is logged with the error, and the agent still gets its result."""
+    log = []
+    fake = ScriptedInteractions(
+        [call_step("c1", "get_order", {})],
+        [reply_step("Sorry, let me try again.")],
+    )
+    use_fake(agent, monkeypatch, fake)
+    history = []
+
+    await agent.get_complete_reply(recording(agent.tools_for(shop), log), history, "where is my order?")
+
+    assert [call.name for call in log] == ["get_order"]
+    assert log[0].arguments == {}
+    assert log[0].result is None
+    assert "order_id" in log[0].error
+    assert result_of(history, "c1")["is_error"] is True
+
+
+async def test_unknown_tool_is_not_in_the_call_log(agent, shop, monkeypatch):
+    """The log lists calls that ran a tool. A request for a tool that does not exist is not one."""
+    log = []
+    fake = ScriptedInteractions(
+        [call_step("c1", "no_such_tool", {})],
+        [reply_step("I cannot do that.")],
+    )
+    use_fake(agent, monkeypatch, fake)
+    history = []
+
+    await agent.get_complete_reply(recording(agent.tools_for(shop), log), history, "do something odd")
+
+    assert log == []
+    assert result_of(history, "c1")["is_error"] is True
+
+
+async def test_call_refused_on_the_last_turn_is_not_in_the_call_log(agent, shop, monkeypatch):
+    """A call that is refused because of the turn limit never ran, so it is not logged."""
+    monkeypatch.setattr(agent, "MAX_TURNS", 3)
+    log = []
+    fake = ScriptedInteractions(
+        [call_step("c1", "get_order", {"order_id": "O1001"})],
+        [call_step("c2", "get_order", {"order_id": "O1001"})],
+        [call_step("c3", "refund_order", {"order_id": "O1001"})],
+    )
+    use_fake(agent, monkeypatch, fake)
+    history = []
+
+    with pytest.raises(agent.TurnLimitError):
+        await agent.get_complete_reply(recording(agent.tools_for(shop), log), history, "refund O1001")
+
+    assert [call.name for call in log] == ["get_order", "get_order"]
+    assert result_of(history, "c3")["is_error"] is True
+
+
+async def test_call_log_does_not_change_what_the_agent_sees(agent, monkeypatch):
+    """With or without the recorder, the history ends up the same."""
+    async def converse(tools):
+        fake = ScriptedInteractions(
+            [call_step("c1", "refund_order", {"order_id": "O1001", "amount": 1000})],
+            [reply_step("Refunded 10.00.")],
+        )
+        use_fake(agent, monkeypatch, fake)
+        history = []
+        await agent.get_complete_reply(tools, history, "refund 10.00 of O1001")
+        return history
+
+    plain = await converse(agent.tools_for(seed.get_seed_shop()))
+    recorded = await converse(recording(agent.tools_for(seed.get_seed_shop()), []))
+
+    assert recorded == plain

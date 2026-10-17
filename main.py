@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from itertools import takewhile
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -15,6 +15,8 @@ import config
 from shop import seed
 from shop.store import Shop
 import support_agent
+from tool_recorder import ToolCall, recording
+from app_types import History
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +43,9 @@ class ChatResponse(BaseModel):
 class Conversation:
     """A conversation's `history` and the lock that serialises its turns."""
 
-    history: list[dict[str, Any]] = field(default_factory=list)
+    history: History = field(default_factory=list)
     shop: Shop = field(default_factory=seed.get_seed_shop)
+    tool_calls: list[ToolCall] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -50,7 +53,7 @@ class Conversation:
 _conversations: dict[str, Conversation] = {}
 
 
-def _final_reply(history: list[dict[str, Any]]) -> str:
+def _final_reply(history: History) -> str:
     """Return the text of the agent's answer to the latest message.
 
     `support_agent` hands everything back through `history`, thoughts, tool
@@ -111,7 +114,13 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         conversation = _conversations[payload.conversation_id] = Conversation()
     async with conversation.lock:
         try:
-            await support_agent.get_complete_reply(conversation.shop, conversation.history, payload.message)
+            tools = recording(
+                support_agent.tools_for(conversation.shop),
+                conversation.tool_calls)
+            await support_agent.get_complete_reply(
+                tools,
+                conversation.history,
+                payload.message)
         except config.MissingAPIKeyError:
             logger.exception("The Gemini API key is not configured")
             raise HTTPException(status_code=503, detail="The support agent is not configured.")
