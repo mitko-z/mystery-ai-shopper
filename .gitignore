@@ -221,3 +221,4 @@ __marimo__/
 /.agents/skills/library-skills/.library-skills.json
 /.agents/skills/library-skills/SKILL.md
 /.claude/
+/.vscode/
