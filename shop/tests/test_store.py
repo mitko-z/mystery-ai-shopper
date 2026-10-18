@@ -5,12 +5,6 @@ from shop import store
 pytestmark = pytest.mark.anyio
 
 
-@pytest.fixture
-def anyio_backend():
-    """Run anyio-marked tests on asyncio only."""
-    return "asyncio"
-
-
 def assert_error(result, code):
     """Assert `result` is a structured failure with the given error code."""
     assert result["ok"] is False

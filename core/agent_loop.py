@@ -1,77 +1,33 @@
 import functools
 import json
+from dataclasses import dataclass
+from itertools import takewhile
 from typing import Any, Optional
-import sys
 
 from google import genai
 from google.genai import types
-import config
-import asyncio
 
-from shop import store
-from app_types import Tools, Step, History
+from core import config
+from core.app_types import Tools, Step, History
 
-
-get_order_function = {
-    "type": "function",
-    "name": "get_order",
-    "description": "Retrieves information about a specific order.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "order_id": {"type": "string", "description": "The ID of the order to retrieve."}
-        },
-        "required": ["order_id"]
-    }
-}
-
-check_stock_function = {
-    "type": "function",
-    "name": "check_stock",
-    "description": "Checks the stock availability of a specific product.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "product_id": {"type": "string", "description": "The ID of the product to check."}
-        },
-        "required": ["product_id"]
-    }
-}
-
-refund_order_function = {
-    "type": "function",
-    "name": "refund_order",
-    "description": "Processes a refund for a specific order.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "order_id": {"type": "string", "description": "The ID of the order to refund."},
-            "amount": {"type": "integer", "description": "The amount to refund, in cents."}
-        },
-        "required": ["order_id"]
-    }
-}
+DEFAULT_MODEL = "gemini-3.6-flash"
 
 MAX_TURNS = 8 # max turns the agent can do before replying with a final answer
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    """What makes one agent different from another: who it is and which tools it may ask for."""
+
+    system_instruction: str
+    tool_schemas: list[dict[str, Any]]
+    model: str = DEFAULT_MODEL
+
 
 class TurnLimitError(Exception):
     """Raised when the agent exceeds the maximum number of turns without producing a final answer."""
     pass
 
-def tools_for(shop: store.Shop) -> Tools:
-    """Build the tool definitions for the support agent, using the shop's methods.
-
-    Args:
-        shop: The shop instance whose methods are used as tools.
-
-    Returns:
-        A dictionary mapping tool names to their corresponding methods.
-    """
-    return {
-        "get_order": shop.get_order,
-        "check_stock": shop.check_stock,
-        "refund_order": shop.refund_order
-    }
 
 @functools.cache
 def _get_client() -> genai.Client:
@@ -98,8 +54,8 @@ def _get_client() -> genai.Client:
         ),
     )
 
-async def run_turn(history: History, user_message: Optional[str]) -> None:
-    """Run one conversation turn with the support agent and record it in `history`.
+async def run_turn(history: History, user_message: Optional[str], spec: AgentSpec) -> None:
+    """Run one conversation turn with the agent and record it in `history`.
 
     `history` is the only output. The turn appends, in order, the user message
     and every step the agent produced: `thought`, `function_call` and
@@ -114,6 +70,7 @@ async def run_turn(history: History, user_message: Optional[str]) -> None:
         user_message: The customer's message, e.g. "Where is my order O1001?".
             If None, the turn is a follow-up to the previous turn and uses the last
             tool result as input.
+        spec: The agent's system instruction, tool schemas and model.
 
     Raises:
         config.MissingAPIKeyError: If the API key is not set.
@@ -123,14 +80,10 @@ async def run_turn(history: History, user_message: Optional[str]) -> None:
     if user_message is not None:
         new_input.append({"type": "user_input", "content": [{"type": "text", "text": user_message}]})
     interaction = await _get_client().aio.interactions.create(
-        model="gemini-3.6-flash",
+        model=spec.model,
         input=[*history, *new_input],
-        system_instruction="you are a support agent for this shop; use the tools to answer",
-        tools=[
-            get_order_function,
-            check_stock_function,
-            refund_order_function
-        ],
+        system_instruction=spec.system_instruction,
+        tools=spec.tool_schemas,
     )
 
     if not interaction.steps:
@@ -200,7 +153,8 @@ def _function_result(call: dict[str, Any], result: dict[str, Any]) -> Step:
 async def get_complete_reply(
         tools: Tools,
         history: History,
-        user_message: str) -> None:
+        user_message: str,
+        spec: AgentSpec) -> None:
     """Run conversation turns until the agent produces a `model_output` step, or
     until `MAX_TURNS` is reached. If the agent produces a `function_call`,
     execute the tool and feed the result back to the agent in the next turn.
@@ -213,6 +167,7 @@ async def get_complete_reply(
         history: The conversation so far, as interaction steps. Append to it
             in place.
         user_message: The customer's message.
+        spec: The agent's system instruction, tool schemas and model.
 
     Raises:
         TurnLimitError: If the agent exceeds `MAX_TURNS` without producing a
@@ -221,7 +176,7 @@ async def get_complete_reply(
     for turn in range(MAX_TURNS):
         last_turn = turn == MAX_TURNS - 1
         try:
-            await run_turn(history, user_message)
+            await run_turn(history, user_message, spec)
         except ValueError as e:
             raise TurnLimitError(f"Agent failed to produce a valid turn: {e}")
 
@@ -249,15 +204,26 @@ async def get_complete_reply(
     else:
         raise TurnLimitError(f"The agent could not provide a complete answer in {MAX_TURNS} turns. Please contact support.")
 
-if __name__ == "__main__":
-    history = []
-    if len(sys.argv) > 1:
-        user_message = " ".join(sys.argv[1:])
-    else:
-        user_message = "Hi! I want my order O1001 to be fully refunded! I am not satisfied with the product at all."
-    print(f"User message: {user_message}")
 
-    from shop import seed
-    asyncio.run(get_complete_reply(tools_for(seed.get_seed_shop()), history, user_message))
+def final_text(history: History) -> str:
+    """Return the text of the agent's answer to the latest message.
 
-    print("Updated history:", history)
+    `get_complete_reply` hands everything back through `history`, thoughts, tool
+    calls and tool results included. The answer is the `model_output` step(s)
+    at the end; the earlier steps of the turn are not for the customer. One
+    model response can end with several such steps, and its text parts are
+    joined as they are, the way the SDK builds `Interaction.output_text`.
+
+    Args:
+        history: A conversation whose last turn ended with a `model_output` step.
+
+    Returns:
+        The reply text, or "" if those steps carry no text.
+    """
+    tail = takewhile(lambda step: step.get("type") == "model_output", reversed(history))
+    return "".join(
+        part.get("text", "")
+        for step in reversed(list(tail))
+        for part in step.get("content", [])
+        if part.get("type") == "text"
+    )

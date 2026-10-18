@@ -1,6 +1,6 @@
 import pytest
 
-import config
+from core import config
 
 
 def test_get_api_key_returns_value(monkeypatch):

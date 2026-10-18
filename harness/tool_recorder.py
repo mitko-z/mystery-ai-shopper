@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from app_types import Tools
+from core.app_types import Tools
 
 
 @dataclass(frozen=True)

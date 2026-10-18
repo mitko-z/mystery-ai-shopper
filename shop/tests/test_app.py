@@ -6,9 +6,9 @@ import httpx
 import pytest
 from google.genai import errors as genai_errors
 
-import config
-import main
-from tests.test_support_agent import (
+from core import agent_loop, config
+from shop import app as shop_app
+from tests.fakes import (
     FakeInteractions,
     FakeStep,
     ScriptedInteractions,
@@ -21,22 +21,16 @@ from tests.test_support_agent import (
 pytestmark = pytest.mark.anyio
 
 
-@pytest.fixture
-def anyio_backend():
-    """Run anyio-marked tests on asyncio only."""
-    return "asyncio"
-
-
 @pytest.fixture(autouse=True)
 def fresh_state():
     """Forget the stored conversations before every test. A new one gets its own shop."""
-    main._conversations.clear()
+    shop_app._conversations.clear()
 
 
 @pytest.fixture
 async def client():
     """An HTTP client that talks to the app in-process, on the test's event loop."""
-    transport = httpx.ASGITransport(app=main.app)
+    transport = httpx.ASGITransport(app=shop_app.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
@@ -46,12 +40,12 @@ def use_model(monkeypatch, fake):
 
     The fake client only has `.aio`, so any use of the sync client fails the test.
     """
-    use_fake(main.support_agent, monkeypatch, fake)
+    use_fake(monkeypatch, fake)
 
 
 def shop_of(conversation_id):
     """The shop that belongs to a conversation the app has started."""
-    return main._conversations[conversation_id].shop
+    return shop_app._conversations[conversation_id].shop
 
 
 def say(client, conversation_id, message):
@@ -145,7 +139,7 @@ async def test_conversations_do_not_share_a_shop(client, monkeypatch):
     await say(client, "a", "refund O1001")
     await say(client, "b", "what is the status of O1001?")
 
-    assert main._conversations["a"].shop is not main._conversations["b"].shop
+    assert shop_app._conversations["a"].shop is not shop_app._conversations["b"].shop
     assert (await shop_of("a").get_order("O1001"))["order"]["refunds"] == [{"amount": 5000}]
     assert (await shop_of("b").get_order("O1001"))["order"]["refunds"] == []
     # What the agent of conversation b was told by its own tool call.
@@ -185,7 +179,7 @@ async def test_tool_calls_of_a_conversation_are_logged(client, monkeypatch):
     await say(client, "demo", "It is O1001")
     await say(client, "demo", "Yes, refund it")
 
-    log = main._conversations["demo"].tool_calls
+    log = shop_app._conversations["demo"].tool_calls
     assert [(call.name, call.arguments) for call in log] == [
         ("get_order", {"order_id": "O1001"}),
         ("refund_order", {"order_id": "O1001"}),
@@ -212,8 +206,8 @@ async def test_conversations_have_their_own_tool_call_log(client, monkeypatch):
     await say(client, "a", "refund O1001")
     await say(client, "b", "what is the status of O1001?")
 
-    assert [call.name for call in main._conversations["a"].tool_calls] == ["refund_order"]
-    assert [call.name for call in main._conversations["b"].tool_calls] == ["get_order"]
+    assert [call.name for call in shop_app._conversations["a"].tool_calls] == ["refund_order"]
+    assert [call.name for call in shop_app._conversations["b"].tool_calls] == ["get_order"]
 
 
 async def test_conversation_without_tool_calls_has_an_empty_log(client, monkeypatch):
@@ -222,7 +216,7 @@ async def test_conversation_without_tool_calls_has_an_empty_log(client, monkeypa
 
     await say(client, "demo", "hi")
 
-    assert main._conversations["demo"].tool_calls == []
+    assert shop_app._conversations["demo"].tool_calls == []
 
 
 async def test_reply_is_the_final_text_only(client, monkeypatch):
@@ -280,7 +274,7 @@ async def test_invalid_request_is_rejected(client, monkeypatch, body):
 
     assert response.status_code == 422
     assert fake.calls == []
-    assert main._conversations == {}
+    assert shop_app._conversations == {}
 
 
 # --- failures ---
@@ -290,7 +284,7 @@ async def test_missing_api_key_is_a_503(client, monkeypatch):
     def no_key():
         raise config.MissingAPIKeyError(f"{config.API_KEY_ENV_VAR} is not set.")
 
-    monkeypatch.setattr(main.support_agent, "_get_client", no_key)
+    monkeypatch.setattr(agent_loop, "_get_client", no_key)
 
     response = await say(client, "demo", "hi")
 
@@ -300,7 +294,7 @@ async def test_missing_api_key_is_a_503(client, monkeypatch):
 
 async def test_turn_limit_is_a_502_and_the_conversation_goes_on(client, monkeypatch):
     """After the limit error the history is kept, so the next message can continue it."""
-    monkeypatch.setattr(main.support_agent, "MAX_TURNS", 2)
+    monkeypatch.setattr(agent_loop, "MAX_TURNS", 2)
     fake = ScriptedInteractions(
         [call_step("c1", "get_order", {"order_id": "O1001"})],
         [call_step("c2", "get_order", {"order_id": "O1001"})],

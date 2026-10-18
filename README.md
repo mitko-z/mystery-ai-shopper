@@ -1,6 +1,18 @@
 # mystery-ai-shopper
 Intended for testing how your ai agent is good in using the tools you set up
 
+## Layout
+
+Everything specific to the system under test (here a fake shop and its support agent) lives in one package, so the testing code can be pointed at another system later.
+
+| Folder | What it holds |
+| --- | --- |
+| `core/` | Reusable plumbing with no domain knowledge: configuration, shared types, and the Gemini agent loop (`agent_loop.py`). |
+| `harness/` | Tools for testing an agent from outside, for now the tool-call recorder (`tool_recorder.py`). |
+| `shop/` | The fake shop and everything that belongs to it: `store.py` and `seed.py` (the shop), `support_agent.py` (the agent's prompt and tools), `session.py` (one conversation with the agent), `app.py` (the HTTP API), `static/` (the demo page) and `tests/` (their tests). |
+
+`core` imports nothing else from this project, and `harness` never imports `shop`.
+
 ## Setup
 
 The agent reads the Google (Gemini) API key from the `GEMINI_API_KEY` system environment variable. The key is never stored in the repository.
@@ -22,14 +34,14 @@ Restart the terminal/IDE afterwards so it picks up the variable.
 ## Run
 
 ```
-uv run fastapi dev main.py
+uv run fastapi dev shop/app.py
 ```
 
 The server listens on http://127.0.0.1:8000. Interactive docs are at http://127.0.0.1:8000/docs.
 
 ## Demo chat page
 
-Open http://127.0.0.1:8000/ui for a simple browser chat with the support agent (`static/index.html`, a single file with no dependencies). It offers a few example questions, and "New conversation" starts a fresh `conversation_id`. The page calls `POST /chat` on the same origin, so it needs the server above to be running.
+Open http://127.0.0.1:8000/ui for a simple browser chat with the support agent (`shop/static/index.html`, a single file with no dependencies). It offers a few example questions, and "New conversation" starts a fresh `conversation_id`. The page calls `POST /chat` on the same origin, so it needs the server above to be running.
 
 ## Chat with the support agent
 
@@ -39,7 +51,7 @@ Open http://127.0.0.1:8000/ui for a simple browser chat with the support agent (
 {"conversation_id": "demo", "reply": "..."}
 ```
 
-Pick any `conversation_id` (up to 128 characters) to start a conversation and send it again to continue it. The agent can look up orders, check stock and refund orders, using the functions in `support_agent.py`. Each conversation's history is kept in memory, so it is lost when the server restarts, and different ids never share history. Messages of one conversation are handled one at a time.
+Pick any `conversation_id` (up to 128 characters) to start a conversation and send it again to continue it. The agent can look up orders, check stock and refund orders, using the functions in `shop/support_agent.py`. Each conversation's history is kept in memory, so it is lost when the server restarts, and different ids never share history. Messages of one conversation are handled one at a time.
 
 Example of a 3-turn conversation (Linux/macOS/Git Bash). The customer gives the order number on turn 2, and the agent refunds on turn 3:
 
@@ -80,3 +92,5 @@ uv run pytest
 ```
 
 The tests use a scripted fake in place of Gemini, so they need no API key and make no network calls.
+
+Tests sit next to what they test: `tests/` holds the tests of the testing tool (`core`, `harness`) and the fakes they share (`tests/fakes.py`), and `shop/tests/` holds the tests of the fake shop and its support agent. `uv run pytest` runs both; add a folder name to run one, e.g. `uv run pytest shop/tests`.
