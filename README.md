@@ -8,10 +8,11 @@ Everything specific to the system under test (here a fake shop and its support a
 | Folder | What it holds |
 | --- | --- |
 | `core/` | Reusable plumbing with no domain knowledge: configuration, shared types, the Gemini agent loop (`agent_loop.py`) and the tool-call recorder (`tool_recorder.py`). |
-| `evaluator/` | The tester, which talks to an agent from outside as a simulated customer. Empty for now; the customer agent and the scenario runner are being built. |
+| `evaluator/` | The tester. A simulated customer (`customer.py`) with a persona and a secret goal chats with any `Target` (`target.py`, `http_target.py`), and `runner.py` runs a `Scenario` and prints the conversation. |
+| `targets/` | One module per system under test: how to reach it and which scenarios to run against it. `targets/shop.py` is the entry for the fake shop. |
 | `shop/` | The fake shop and everything that belongs to it: `store.py` and `seed.py` (the shop), `support_agent.py` (the agent's prompt and tools), `session.py` (one conversation with the agent), `app.py` (the HTTP API), `static/` (the demo page) and `tests/` (their tests). |
 
-`core` imports nothing else from this project. `shop` and `evaluator` both depend on `core` only, never on each other, so the tester can be pointed at a system that is not this shop.
+`core` imports nothing else from this project. `shop` and `evaluator` both depend on `core` only, never on each other, so the tester can be pointed at a system that is not this shop. Only a module in `targets/` knows both a system and the evaluator. The tester treats the system as a black box: all it needs is a way to send a message and get a reply.
 
 ## Setup
 
@@ -84,6 +85,23 @@ Errors:
 | 422 | `conversation_id` or `message` is missing, blank or too long. |
 | 502 | The agent could not give a final answer (turn limit reached, invalid response or empty answer), or the Gemini call failed. The conversation is kept, so you can write again. |
 | 503 | `GEMINI_API_KEY` is not set. See [Setup](#setup). |
+
+## Run a scenario with the simulated customer
+
+```
+uv run python -m evaluator.runner shop refund_o1002
+```
+
+A second AI agent plays a customer with a persona and a secret goal (here: Alex, who wants a refund for order `O1002`). It chats with the support agent of the fake shop, decides when it is done or gives up, and the whole conversation is printed as it happens, followed by the outcome: `goal_achieved`, `gave_up`, or `cut_off` when the message limit is reached. It needs `GEMINI_API_KEY` (see [Setup](#setup)) and makes real model calls. No server has to run: the shop is called in the same process through its HTTP API, and a run always starts from a fresh shop.
+
+The output differs from run to run, because both sides are language models.
+
+To test another system, add a module `targets/<name>.py` with:
+
+- `open_target()`: an async context manager that yields an object with `async send(message) -> reply` (see `evaluator/target.py`). `HttpChatTarget` already covers any system with a `POST /chat` endpoint taking `conversation_id` and `message` and answering `{"reply": ...}`.
+- `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit).
+
+Then run `uv run python -m evaluator.runner <name> <scenario>`. The system under test needs no changes.
 
 ## Tests
 
