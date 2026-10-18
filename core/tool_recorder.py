@@ -2,7 +2,7 @@ import functools
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from core.app_types import Tools
 
@@ -16,7 +16,7 @@ class ToolCall:
     result: Any
     started_at: datetime
     duration: float
-    error: str | None = None
+    error: Optional[str] = None
 
 
 def recording(tools: Tools, log: list[ToolCall]) -> Tools:

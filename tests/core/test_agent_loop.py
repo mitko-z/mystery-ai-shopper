@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -103,7 +104,7 @@ async def test_history_is_sent_before_the_new_message(agent, monkeypatch):
     assert history == [*sent, reply_step("Sure.")]
 
 
-async def test_tool_calls_are_recorded_in_history(agent, monkeypatch, capsys):
+async def test_tool_calls_are_recorded_in_history(agent, monkeypatch, caplog):
     """Every step the model produced is kept, tool calls included, in order."""
     thought = {"type": "thought", "signature": "sig"}
     call = {"type": "function_call", "id": "call_1", "name": "lookup",
@@ -112,10 +113,11 @@ async def test_tool_calls_are_recorded_in_history(agent, monkeypatch, capsys):
     use_fake(monkeypatch, fake)
     history = []
 
-    await agent.run_turn(history, "look up A", SPEC)
+    with caplog.at_level(logging.DEBUG, logger="core.agent_loop"):
+        await agent.run_turn(history, "look up A", SPEC)
 
     assert history == [user_step("look up A"), thought, call]
-    assert "lookup" in capsys.readouterr().out
+    assert "lookup" in caplog.text
 
 
 async def test_history_untouched_when_response_has_no_steps(agent, monkeypatch):

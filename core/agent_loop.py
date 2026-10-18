@@ -1,5 +1,6 @@
 import functools
 import json
+import logging
 from dataclasses import dataclass
 from itertools import takewhile
 from typing import Any, Optional
@@ -10,6 +11,8 @@ from google.genai import types
 from core import config
 from core.app_types import Tools, Step, History
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MODEL = "gemini-3.6-flash"
 
 MAX_TURNS = 8 # max turns the agent can do before replying with a final answer
@@ -17,7 +20,9 @@ MAX_TURNS = 8 # max turns the agent can do before replying with a final answer
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """What makes one agent different from another: who it is and which tools it may ask for."""
+    """What makes one agent different from another: who it is and which tools it
+    may ask for.
+    """
 
     system_instruction: str
     tool_schemas: list[dict[str, Any]]
@@ -25,7 +30,9 @@ class AgentSpec:
 
 
 class TurnLimitError(Exception):
-    """Raised when the agent exceeds the maximum number of turns without producing a final answer."""
+    """Raised when the agent exceeds the maximum number of turns without producing
+    a final answer.
+    """
     pass
 
 
@@ -102,7 +109,7 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
         for step in new_steps
         if step["type"] == "function_call"
     ]
-    print(f"Tools to call: {tools_to_call}")
+    logger.debug("Tools to call: %s", tools_to_call)
 
 
 async def _execute_call(
