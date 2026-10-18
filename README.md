@@ -7,11 +7,11 @@ Everything specific to the system under test (here a fake shop and its support a
 
 | Folder | What it holds |
 | --- | --- |
-| `core/` | Reusable plumbing with no domain knowledge: configuration, shared types, and the Gemini agent loop (`agent_loop.py`). |
-| `harness/` | Tools for testing an agent from outside, for now the tool-call recorder (`tool_recorder.py`). |
+| `core/` | Reusable plumbing with no domain knowledge: configuration, shared types, the Gemini agent loop (`agent_loop.py`) and the tool-call recorder (`tool_recorder.py`). |
+| `evaluator/` | The tester, which talks to an agent from outside as a simulated customer. Empty for now; the customer agent and the scenario runner are being built. |
 | `shop/` | The fake shop and everything that belongs to it: `store.py` and `seed.py` (the shop), `support_agent.py` (the agent's prompt and tools), `session.py` (one conversation with the agent), `app.py` (the HTTP API), `static/` (the demo page) and `tests/` (their tests). |
 
-`core` imports nothing else from this project, and `harness` never imports `shop`.
+`core` imports nothing else from this project. `shop` and `evaluator` both depend on `core` only, never on each other, so the tester can be pointed at a system that is not this shop.
 
 ## Setup
 
@@ -93,4 +93,4 @@ uv run pytest
 
 The tests use a scripted fake in place of Gemini, so they need no API key and make no network calls.
 
-Tests sit next to what they test: `tests/` holds the tests of the testing tool (`core`, `harness`) and the fakes they share (`tests/fakes.py`), and `shop/tests/` holds the tests of the fake shop and its support agent. `uv run pytest` runs both; add a folder name to run one, e.g. `uv run pytest shop/tests`.
+Tests sit next to what they test: `tests/` holds the tests of the testing tool (`core`, and later `evaluator`) and the fakes they share (`tests/fakes.py`), and `shop/tests/` holds the tests of the fake shop and its support agent. `uv run pytest` runs both; add a folder name to run one, e.g. `uv run pytest shop/tests`.

@@ -4,7 +4,7 @@ import pytest
 
 from core import agent_loop
 from core.agent_loop import AgentSpec
-from harness.tool_recorder import recording
+from core.tool_recorder import recording
 from tests.fakes import ScriptedInteractions, call_step, reply_step, result_of, stub_tools, use_fake
 
 pytestmark = pytest.mark.anyio       # every test here is async

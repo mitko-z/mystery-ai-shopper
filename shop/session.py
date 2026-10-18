@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 from core import agent_loop
 from core.app_types import History
-from harness.tool_recorder import ToolCall, recording
+from core.tool_recorder import ToolCall, recording
 from shop import seed, support_agent
 from shop.store import Shop
 
