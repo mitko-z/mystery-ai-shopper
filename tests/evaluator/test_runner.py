@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType
@@ -5,8 +6,9 @@ from types import ModuleType
 import pytest
 
 from evaluator import runner
+from evaluator.customer import CustomerError
 from evaluator.outcome import Outcome, OutcomeKind
-from evaluator.runner import Speaker, run_scenario
+from evaluator.runner import Speaker, Transcript, run_scenario
 from evaluator.scenario import Scenario
 from evaluator.target import Target, TargetError
 from tests.fakes import ScriptedInteractions, call_step, reply_step, use_fake
@@ -39,6 +41,13 @@ class FailingTarget(Target):
         raise TargetError("boom")
 
 
+async def play(target, scenario=None, **kwargs):
+    """Run `scenario` against `target` the way a caller does: with a transcript of its own."""
+    transcript = Transcript()
+    await run_scenario(target, scenario or make_scenario(), transcript, **kwargs)
+    return transcript
+
+
 def finish_turns(outcome="gave_up", reason="Refused.", goodbye="Thanks, bye."):
     """The two model turns in which the customer calls `finish` and then says goodbye."""
     return (
@@ -55,7 +64,7 @@ async def test_conversation_ends_when_the_customer_finishes(monkeypatch):
     use_fake(monkeypatch, fake)
     target = StubTarget("Sorry, shipped orders cannot be refunded.")
 
-    transcript = await run_scenario(target, make_scenario())
+    transcript = await play(target)
 
     assert [(m.number, m.speaker, m.text) for m in transcript.messages] == [
         (1, Speaker.CUSTOMER, "Hi, refund for O1002 please."),
@@ -66,12 +75,23 @@ async def test_conversation_ends_when_the_customer_finishes(monkeypatch):
     assert target.received == ["Hi, refund for O1002 please."]
 
 
+async def test_the_outcome_is_returned_and_stored_in_the_transcript(monkeypatch):
+    """Both ways to get at the outcome give the same one."""
+    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
+    transcript = Transcript()
+
+    outcome = await run_scenario(StubTarget("Hello"), make_scenario(), transcript)
+
+    assert outcome is transcript.outcome
+    assert outcome == Outcome(OutcomeKind.GAVE_UP, "Refused.")
+
+
 async def test_customer_that_finishes_at_once_sends_nothing(monkeypatch):
     """A customer who leaves on the first turn never reaches the target."""
     use_fake(monkeypatch, ScriptedInteractions(*finish_turns(goodbye="Never mind.")))
     target = StubTarget()
 
-    transcript = await run_scenario(target, make_scenario())
+    transcript = await play(target)
 
     assert target.received == []
     assert [m.text for m in transcript.messages] == ["Never mind."]
@@ -83,7 +103,7 @@ async def test_conversation_is_cut_off_at_the_message_limit(monkeypatch):
     use_fake(monkeypatch, fake)
     target = StubTarget("r1", "r2")
 
-    transcript = await run_scenario(target, make_scenario(max_messages=2))
+    transcript = await play(target, make_scenario(max_messages=2))
 
     assert target.received == ["one", "two"]
     assert [m.text for m in transcript.messages] == ["one", "r1", "two", "r2"]
@@ -96,7 +116,7 @@ async def test_customer_can_finish_after_the_last_answer(monkeypatch):
     """A run that ends well on the very last answer is not reported as cut off."""
     use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns("goal_achieved", "Got it.")))
 
-    transcript = await run_scenario(StubTarget("Done, refunded."), make_scenario(max_messages=1))
+    transcript = await play(StubTarget("Done, refunded."), make_scenario(max_messages=1))
 
     assert transcript.outcome == Outcome(OutcomeKind.GOAL_ACHIEVED, "Got it.")
 
@@ -106,7 +126,7 @@ async def test_messages_are_reported_as_they_happen(monkeypatch):
     use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
     seen = []
 
-    transcript = await run_scenario(StubTarget("Hello"), make_scenario(), on_message=seen.append)
+    transcript = await play(StubTarget("Hello"), on_message=seen.append)
 
     assert seen == transcript.messages
     assert [m.number for m in seen] == [1, 2, 3]
@@ -117,7 +137,49 @@ async def test_a_failing_target_stops_the_run(monkeypatch):
     use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")]))
 
     with pytest.raises(TargetError, match="boom"):
-        await run_scenario(FailingTarget(), make_scenario())
+        await play(FailingTarget())
+
+
+# --- a transcript the caller owns ---
+
+async def test_what_was_said_before_a_target_failure_is_kept(monkeypatch):
+    """The caller's transcript still holds the opening message when the target fails, and has no outcome."""
+    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")]))
+    transcript = Transcript()
+
+    with pytest.raises(TargetError):
+        await run_scenario(FailingTarget(), make_scenario(), transcript)
+
+    assert [(m.speaker, m.text) for m in transcript.messages] == [(Speaker.CUSTOMER, "Hi")]
+    assert transcript.outcome is None
+
+
+async def test_what_was_said_before_a_timeout_is_kept(monkeypatch):
+    """A run that is cancelled by a timeout leaves the conversation so far in the caller's transcript."""
+    class SlowTarget(Target):
+        async def send(self, message):
+            await asyncio.sleep(10)
+
+    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")]))
+    transcript = Transcript()
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(run_scenario(SlowTarget(), make_scenario(), transcript), timeout=0.05)
+
+    assert [m.text for m in transcript.messages] == ["Hi"]
+    assert transcript.outcome is None
+
+
+async def test_what_was_said_before_a_customer_failure_is_kept(monkeypatch):
+    """If the simulated customer fails on its second turn, the first exchange is still in the transcript."""
+    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], [reply_step("   ")]))
+    transcript = Transcript()
+
+    with pytest.raises(CustomerError):
+        await run_scenario(StubTarget("Hello"), make_scenario(), transcript)
+
+    assert [m.text for m in transcript.messages] == ["Hi", "Hello"]
+    assert transcript.outcome is None
 
 
 # --- command line ---

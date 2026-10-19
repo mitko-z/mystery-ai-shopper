@@ -47,9 +47,13 @@ class Message:
 
 @dataclass
 class Transcript:
-    """A finished run: what was said, and how it ended."""
+    """What was said in a run, and how it ended.
 
-    scenario: Scenario
+    The caller creates it and `run_scenario` fills it in. Because the caller
+    owns it, what was said before a failure or a timeout is still there
+    afterwards. `outcome` stays None until the run has ended by itself.
+    """
+
     messages: list[Message] = field(default_factory=list)
     outcome: Outcome | None = None
 
@@ -57,9 +61,10 @@ class Transcript:
 async def run_scenario(
     target: Target,
     scenario: Scenario,
+    transcript: Transcript,
     on_message: Optional[Callable[[Message], None]] = None,
-) -> Transcript:
-    """Let a simulated customer play `scenario` against `target`.
+) -> Outcome:
+    """Let a simulated customer play `scenario` against `target`, recording it in `transcript`.
 
     The customer writes, the target answers, and so on until the customer calls
     `finish`, or has sent `scenario.max_messages` messages. After the last
@@ -67,14 +72,21 @@ async def run_scenario(
     ends well on the last answer is not reported as cut off. The customer's
     goodbye is part of the transcript but is never sent to the target.
 
+    Messages are added to `transcript` as they happen. If this raises, or is
+    cancelled by a timeout, the transcript keeps what was said so far and its
+    outcome stays None. When the run ends by itself, the outcome is both
+    returned and stored in `transcript.outcome`.
+
     Args:
         target: The system to talk to.
         scenario: Who the customer is and what they want.
+        transcript: Where the conversation and its outcome are recorded. Pass
+            an empty one.
         on_message: Called with each message as soon as it exists, to show the
             conversation while it runs.
 
     Returns:
-        The transcript, with an outcome.
+        How the conversation ended.
 
     Raises:
         TargetError: If the target fails.
@@ -82,7 +94,6 @@ async def run_scenario(
             model errors: If the simulated customer fails.
     """
     customer = SimulatedCustomer(scenario)
-    transcript = Transcript(scenario)
 
     def add(speaker: Speaker, text: str) -> None:
         message = Message(len(transcript.messages) + 1, speaker, text.strip())
@@ -97,7 +108,7 @@ async def run_scenario(
             if text.strip():
                 add(Speaker.CUSTOMER, text)
             transcript.outcome = customer.outcome
-            return transcript
+            return customer.outcome
         if sent == scenario.max_messages:
             break  # the customer had its last chance to finish, and did not
         add(Speaker.CUSTOMER, text)
@@ -108,7 +119,7 @@ async def run_scenario(
         OutcomeKind.CUT_OFF,
         f"The conversation reached the limit of {scenario.max_messages} messages.",
     )
-    return transcript
+    return transcript.outcome
 
 
 def format_header(scenario: Scenario) -> str:
@@ -168,10 +179,11 @@ async def _run(target_name: str, scenario_name: str) -> None:
     target_module = load_target(target_name)
     scenario = get_scenario(target_module, scenario_name)
     print(format_header(scenario))
+    transcript = Transcript()
     async with target_module.open_target() as target:
-        transcript = await run_scenario(target, scenario, on_message=lambda m: print(format_message(m)))
+        outcome = await run_scenario(target, scenario, transcript, on_message=lambda m: print(format_message(m)))
     print()
-    print(format_outcome(transcript.outcome))
+    print(format_outcome(outcome))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
