@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 
 import pytest
@@ -62,6 +63,25 @@ async def test_failing_tool_is_logged_and_the_error_is_raised():
     assert log[0].arguments == {"x": 1}
     assert log[0].result is None
     assert log[0].error == "bad x: 1"
+
+
+async def test_cancelled_call_is_logged_and_the_cancellation_is_raised():
+    """wait_for cancels a slow call by raising CancelledError inside it. That is not an
+    Exception, but the call is still logged, and the cancellation still reaches the caller."""
+    async def slow():
+        await asyncio.sleep(10)
+
+    log = []
+    tools = recording({"slow": slow}, log)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(tools["slow"](), timeout=0.01)
+
+    assert len(log) == 1
+    assert log[0].name == "slow"
+    assert log[0].result is None
+    assert log[0].error == "CancelledError"
+    assert 0 < log[0].duration < 5
 
 
 async def test_call_with_wrong_arguments_is_logged_and_the_error_is_raised():
