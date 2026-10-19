@@ -99,9 +99,19 @@ The output differs from run to run, because both sides are language models.
 To test another system, add a module `targets/<name>.py` with:
 
 - `open_target()`: an async context manager that yields an object with `async send(message) -> reply` (see `evaluator/target.py`). `HttpChatTarget` already covers any system with a `POST /chat` endpoint taking `conversation_id` and `message` and answering `{"reply": ...}`.
-- `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit).
+- `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit and written expectations).
 
 Then run `uv run python -m evaluator.runner <name> <scenario>`. The system under test needs no changes.
+
+### Expectations and the tool-call log
+
+A scenario can list `expectations`: plain sentences about what the system must and must not do, such as "must not offer a refund for a shipped order" or "must not state policies it was not given". They are written for a judge that will read the transcript, and neither the simulated customer nor the system under test ever sees them.
+
+Besides the conversation, a target may also be able to tell which tools its agent actually used, for example that it called `refund_order`. This is optional. Most real systems will not offer it, and the evaluator works without it.
+
+To offer it, give the target a `tool_calls()` method that returns the calls made so far (the `ToolCallSource` protocol in `evaluator/target.py`). It is worth having because an agent's words can differ from its actions: it may say "I have refunded your order" without having done so. A judge that only reads the conversation can be fooled by that, and the tool-call list lets us check its verdict against what really happened.
+
+If a target keeps no such list, do not add the method. Do not return an empty list instead, because an empty list means "the agent called no tools", and a missing method means "we cannot tell". The fake shop offers the list because its code runs in the same process (`targets/shop.py`).
 
 ## Tests
 

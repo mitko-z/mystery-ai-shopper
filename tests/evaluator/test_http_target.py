@@ -40,6 +40,13 @@ async def test_message_is_posted_and_the_reply_returned(make_target):
     assert json.loads(requests[0].content) == {"conversation_id": "conv-1", "message": "hi"}
 
 
+async def test_the_conversation_id_can_be_read_back(make_target):
+    """The id is public, so a target that adds a side channel can find its conversation."""
+    target = make_target(lambda request: httpx.Response(200, json={"reply": "ok"}))
+
+    assert target.conversation_id == "conv-1"
+
+
 async def test_the_endpoint_path_can_be_chosen(make_target):
     """A system whose chat endpoint is not /chat can still be reached."""
     paths = []

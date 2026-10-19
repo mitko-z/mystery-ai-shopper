@@ -34,3 +34,28 @@ def test_scenario_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         scenario.name = "new name"
+
+
+def test_expectations_default_to_none():
+    """A scenario without written expectations has an empty tuple, so it can still be run."""
+    assert make_scenario().expectations == ()
+
+
+def test_expectations_are_kept_in_order():
+    """The sentences are stored as given."""
+    scenario = make_scenario(expectations=("must not offer a refund", "must explain why"))
+
+    assert scenario.expectations == ("must not offer a refund", "must explain why")
+
+
+def test_a_single_string_is_not_taken_for_a_list_of_expectations():
+    """Iterating a bare string would give one 'expectation' per letter, so it is refused."""
+    with pytest.raises(TypeError, match="tuple"):
+        make_scenario(expectations="must not offer a refund")
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_a_blank_expectation_is_refused(blank):
+    """An empty sentence cannot be checked against anything."""
+    with pytest.raises(ValueError, match="blank"):
+        make_scenario(expectations=("must be polite", blank))

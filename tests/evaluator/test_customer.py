@@ -40,6 +40,22 @@ async def test_the_model_is_told_who_to_play_and_may_only_finish(monkeypatch):
     assert sent["tools"] == [FINISH_SCHEMA]
 
 
+async def test_the_customer_is_not_told_what_the_target_is_expected_to_do(monkeypatch):
+    """Expectations are for the judge. If the customer saw them, it could steer the conversation to them."""
+    scenario = Scenario(
+        name="refund",
+        persona=SCENARIO.persona,
+        goal=SCENARIO.goal,
+        expectations=("must not offer a refund for a shipped order",),
+    )
+    fake = ScriptedInteractions([reply_step("Hi")])
+    use_fake(monkeypatch, fake)
+
+    await SimulatedCustomer(scenario).next_message(None)
+
+    assert "must not offer a refund" not in str(fake.calls[0])
+
+
 def test_the_customer_cannot_choose_cut_off():
     """`cut_off` is decided by the runner, so the model is not offered it."""
     offered = FINISH_SCHEMA["parameters"]["properties"]["outcome"]["enum"]

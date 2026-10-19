@@ -22,6 +22,11 @@ class HttpChatTarget(Target):
         self._conversation_id = conversation_id
         self._path = path
 
+    @property
+    def conversation_id(self) -> str:
+        """The id that keeps all messages of this run in one conversation."""
+        return self._conversation_id
+
     async def send(self, message: str) -> str:
         """Send one message to the chat endpoint and return the agent's reply.
 
