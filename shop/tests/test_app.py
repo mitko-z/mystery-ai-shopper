@@ -80,7 +80,7 @@ class GatedInteractions:
         if n == 1:
             self.started.set()
             await self.release.wait()
-        return SimpleNamespace(steps=[FakeStep(**reply_step(self._replies[n - 1]))])
+        return SimpleNamespace(steps=[FakeStep(**reply_step(self._replies[n - 1]))], usage=None)
 
 
 # --- the conversation ---

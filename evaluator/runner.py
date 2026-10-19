@@ -22,6 +22,7 @@ import httpx
 from google.genai import errors as genai_errors
 
 from core import agent_loop, config
+from core.usage import Usage, track_usage
 from evaluator.customer import CustomerError, SimulatedCustomer
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.scenario import Scenario
@@ -141,6 +142,22 @@ def format_outcome(outcome: Outcome) -> str:
     return f"Outcome: {outcome.kind.value} - {outcome.reason}"
 
 
+def format_usage(usage: Usage) -> str:
+    """The line that reports what a run cost: model calls and tokens.
+
+    Calls whose response carried no usage report are named, because the token
+    counts miss them.
+    """
+    line = (
+        f"Model calls: {usage.calls} | Tokens: input {usage.input_tokens:,}, "
+        f"output {usage.output_tokens:,}, thought {usage.thought_tokens:,}, "
+        f"total {usage.total_tokens:,}"
+    )
+    if usage.calls_without_usage:
+        line += f" | Calls without a usage report: {usage.calls_without_usage} (tokens are incomplete)"
+    return line
+
+
 class UsageError(Exception):
     """Raised when the command line names a target or scenario that does not exist."""
 
@@ -175,15 +192,24 @@ def get_scenario(target_module: ModuleType, name: str) -> Scenario:
 
 
 async def _run(target_name: str, scenario_name: str) -> None:
-    """Run one scenario and print the conversation as it happens."""
+    """Run one scenario and print the conversation as it happens.
+
+    The outcome, if the run reached one, and what the run cost are printed at the
+    end, also when the run fails.
+    """
     target_module = load_target(target_name)
     scenario = get_scenario(target_module, scenario_name)
     print(format_header(scenario))
     transcript = Transcript()
-    async with target_module.open_target() as target:
-        outcome = await run_scenario(target, scenario, transcript, on_message=lambda m: print(format_message(m)))
-    print()
-    print(format_outcome(outcome))
+    with track_usage() as usage:
+        try:
+            async with target_module.open_target() as target:
+                await run_scenario(target, scenario, transcript, on_message=lambda m: print(format_message(m)))
+        finally:
+            print()
+            if transcript.outcome is not None:
+                print(format_outcome(transcript.outcome))
+            print(format_usage(usage))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

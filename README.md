@@ -92,7 +92,7 @@ Errors:
 uv run python -m evaluator.runner shop refund_o1002
 ```
 
-A second AI agent plays a customer with a persona and a secret goal (here: Alex, who wants a refund for order `O1002`). It chats with the support agent of the fake shop, decides when it is done or gives up, and the whole conversation is printed as it happens, followed by the outcome: `goal_achieved`, `gave_up`, or `cut_off` when the message limit is reached. It needs `GEMINI_API_KEY` (see [Setup](#setup)) and makes real model calls. No server has to run: the shop is called in the same process through its HTTP API, and a run always starts from a fresh shop.
+A second AI agent plays a customer with a persona and a secret goal (here: Alex, who wants a refund for order `O1002`). It chats with the support agent of the fake shop, decides when it is done or gives up, and the whole conversation is printed as it happens, followed by the outcome: `goal_achieved`, `gave_up`, or `cut_off` when the message limit is reached. The last line reports what the run cost: the number of model calls and, as far as the API reports them, the tokens (input, output, thought and total). It is printed even when the run fails. It needs `GEMINI_API_KEY` (see [Setup](#setup)) and makes real model calls. No server has to run: the shop is called in the same process through its HTTP API, and a run always starts from a fresh shop.
 
 The output differs from run to run, because both sides are language models.
 

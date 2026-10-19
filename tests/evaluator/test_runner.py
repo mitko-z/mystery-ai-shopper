@@ -5,13 +5,15 @@ from types import ModuleType
 
 import pytest
 
+from core import agent_loop
+from core.usage import Usage
 from evaluator import runner
 from evaluator.customer import CustomerError
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.runner import Speaker, Transcript, run_scenario
 from evaluator.scenario import Scenario
 from evaluator.target import Target, TargetError
-from tests.fakes import ScriptedInteractions, call_step, reply_step, use_fake
+from tests.fakes import ScriptedInteractions, Turn, call_step, reply_step, reported_usage, use_fake
 
 pytestmark = pytest.mark.anyio
 
@@ -248,3 +250,81 @@ def test_main_reports_a_target_failure_in_one_line(monkeypatch, capsys):
     assert code == 1
     assert captured.err.strip() == "error: boom"
     assert "1. Customer: Hi" in captured.out  # what was said before the failure is still shown
+
+
+# --- what a run cost ---
+
+class ModelBackedTarget(Target):
+    """A target that answers with a model call of its own, as the shop's support agent does."""
+
+    async def send(self, message):
+        history = []
+        spec = agent_loop.AgentSpec(system_instruction="you are support", tool_schemas=[])
+        await agent_loop.get_complete_reply({}, history, message, spec)
+        return agent_loop.final_text(history)
+
+
+def test_format_usage_names_calls_and_tokens():
+    usage = Usage(calls=7, input_tokens=5120, output_tokens=410, thought_tokens=880, total_tokens=6410)
+
+    assert runner.format_usage(usage) == (
+        "Model calls: 7 | Tokens: input 5,120, output 410, thought 880, total 6,410"
+    )
+
+
+def test_format_usage_names_calls_that_reported_no_usage():
+    usage = Usage(calls=7, input_tokens=100, total_tokens=100, calls_without_usage=2)
+
+    assert runner.format_usage(usage).endswith(
+        " | Calls without a usage report: 2 (tokens are incomplete)"
+    )
+
+
+def test_format_usage_of_an_unused_run():
+    assert runner.format_usage(Usage()) == (
+        "Model calls: 0 | Tokens: input 0, output 0, thought 0, total 0"
+    )
+
+
+def test_main_prints_what_the_run_cost_counting_the_customer_and_the_target(monkeypatch, capsys):
+    """Calls of the customer and of the target's own model are summed in one line."""
+    finish_call, goodbye = finish_turns()
+    use_fake(monkeypatch, ScriptedInteractions(
+        Turn([reply_step("Hi")], reported_usage(input=100, output=10, total=110)),
+        Turn([reply_step("Hello")], reported_usage(input=50, output=5, thought=5, total=60)),
+        Turn(finish_call, reported_usage(input=200, output=10, total=210)),
+        Turn(goodbye, reported_usage(input=220, output=5, total=225)),
+    ))
+    fake_target_module(monkeypatch, ModelBackedTarget())
+
+    code = runner.main(["fake", "refund"])
+
+    lines = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert lines[-2] == "Outcome: gave_up - Refused."
+    assert lines[-1] == "Model calls: 4 | Tokens: input 570, output 30, thought 5, total 605"
+
+
+def test_main_still_prints_what_the_run_cost_when_it_fails(monkeypatch, capsys):
+    """The calls made before a failure cost money too, so they are reported."""
+    use_fake(monkeypatch, ScriptedInteractions(
+        Turn([reply_step("Hi")], reported_usage(input=100, output=10, total=110)),
+    ))
+    fake_target_module(monkeypatch, FailingTarget())
+
+    code = runner.main(["fake", "refund"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out.splitlines()[-1] == (
+        "Model calls: 1 | Tokens: input 100, output 10, thought 0, total 110"
+    )
+    assert "Outcome:" not in captured.out
+    assert captured.err.strip() == "error: boom"
+
+
+def test_main_prints_no_cost_for_a_run_that_never_started(capsys):
+    """A mistyped target name is a usage error, not a run."""
+    runner.main(["nosuch", "refund"])
+
+    assert "Model calls" not in capsys.readouterr().out

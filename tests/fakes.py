@@ -1,8 +1,33 @@
 """Stand-ins for the Gemini client and for tools, shared by the tests."""
 
+from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import Optional
+
+from google.genai.interactions import Usage as ReportedUsage
 
 from core import agent_loop
+
+
+def reported_usage(input=None, output=None, thought=None, total=None) -> ReportedUsage:
+    """Build the SDK's usage report; a count left out is None, as in a real response."""
+    return ReportedUsage(
+        total_input_tokens=input,
+        total_output_tokens=output,
+        total_thought_tokens=thought,
+        total_tokens=total,
+    )
+
+
+@dataclass
+class Turn:
+    """One scripted model response: its steps and, optionally, its usage report.
+
+    A turn without a report answers with `usage=None`, as the API may do.
+    """
+
+    steps: list[dict]
+    usage: Optional[ReportedUsage] = None
 
 
 class FakeStep:
@@ -18,9 +43,9 @@ class FakeStep:
 class FakeInteractions:
     """Stands in for `client.aio.interactions`; records the calls it receives."""
 
-    def __init__(self, steps):
+    def __init__(self, steps, usage=None):
         self.calls = []
-        self._interaction = SimpleNamespace(steps=steps)
+        self._interaction = SimpleNamespace(steps=steps, usage=usage)
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
@@ -30,20 +55,22 @@ class FakeInteractions:
 class ScriptedInteractions:
     """Stands in for `client.aio.interactions`; answers each call with the next scripted turn.
 
-    Each turn is a list of step dicts. Calling the model more often than the
-    test scripted fails the test, so a runaway loop cannot hang it.
+    Each turn is a list of step dicts, or a `Turn` when the response should also
+    carry a usage report. Calling the model more often than the test scripted
+    fails the test, so a runaway loop cannot hang it.
     """
 
     def __init__(self, *turns):
         self.calls = []
-        self._turns = list(turns)
+        self._turns = [turn if isinstance(turn, Turn) else Turn(turn) for turn in turns]
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
         if len(self.calls) > len(self._turns):
             raise AssertionError("the model was called more often than the test scripted")
-        steps = [FakeStep(**step) for step in self._turns[len(self.calls) - 1]]
-        return SimpleNamespace(steps=steps)
+        turn = self._turns[len(self.calls) - 1]
+        steps = [FakeStep(**step) for step in turn.steps]
+        return SimpleNamespace(steps=steps, usage=turn.usage)
 
 
 def use_fake(monkeypatch, fake):

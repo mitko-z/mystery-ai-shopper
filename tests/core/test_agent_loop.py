@@ -8,12 +8,15 @@ import pytest
 
 from core import agent_loop, config
 from core.agent_loop import AgentSpec
+from core.usage import Usage, track_usage
 from tests.fakes import (
     FakeInteractions,
     FakeStep,
     ScriptedInteractions,
+    Turn,
     call_step,
     reply_step,
+    reported_usage,
     result_of,
     stub_tools,
     use_fake,
@@ -333,3 +336,73 @@ def test_final_text_ignores_model_output_of_earlier_turns():
 def test_final_text_is_empty_without_text_parts():
     """A final step with no text parts gives an empty string, not an error."""
     assert agent_loop.final_text([user_step("hi"), {"type": "model_output"}]) == ""
+
+
+# --- usage ---
+
+class FailingInteractions:
+    """Stands in for `client.aio.interactions`; every call raises, as a 429 would."""
+
+    async def create(self, **kwargs):
+        raise RuntimeError("quota exhausted")
+
+
+async def test_a_model_call_is_counted_with_its_tokens(agent, monkeypatch):
+    """The usage report of a response is added to the run's usage."""
+    use_fake(monkeypatch, FakeInteractions(
+        steps=[FakeStep(**reply_step("Hello!"))],
+        usage=reported_usage(input=100, output=20, thought=30, total=150),
+    ))
+
+    with track_usage() as run:
+        await agent.run_turn([], "hi", SPEC)
+
+    assert run == Usage(
+        calls=1, input_tokens=100, output_tokens=20, thought_tokens=30, total_tokens=150
+    )
+
+
+async def test_a_response_without_usage_is_counted_and_flagged(agent, monkeypatch):
+    """A response that carries no usage report is still a call, and is flagged."""
+    use_fake(monkeypatch, FakeInteractions(steps=[FakeStep(**reply_step("Hello!"))]))
+
+    with track_usage() as run:
+        await agent.run_turn([], "hi", SPEC)
+
+    assert run == Usage(calls=1, calls_without_usage=1)
+
+
+async def test_a_response_without_steps_is_still_counted(agent, monkeypatch):
+    """The model answered and was paid for, even if the answer is unusable."""
+    use_fake(monkeypatch, FakeInteractions(steps=None, usage=reported_usage(input=10, total=10)))
+
+    with track_usage() as run:
+        with pytest.raises(ValueError):
+            await agent.run_turn([], "hi", SPEC)
+
+    assert run == Usage(calls=1, input_tokens=10, total_tokens=10)
+
+
+async def test_a_failed_model_call_is_not_counted(agent, monkeypatch):
+    """A call that raises got no response, so it is not counted."""
+    use_fake(monkeypatch, FailingInteractions())
+
+    with track_usage() as run:
+        with pytest.raises(RuntimeError):
+            await agent.run_turn([], "hi", SPEC)
+
+    assert run == Usage()
+
+
+async def test_every_turn_of_a_tool_loop_is_counted(agent, tools, monkeypatch):
+    """One customer message that needs two tool calls makes three model calls."""
+    use_fake(monkeypatch, ScriptedInteractions(
+        Turn([call_step("c1", "lookup", {"key": "A"})], reported_usage(input=10, output=1, total=11)),
+        Turn([call_step("c2", "lookup", {"key": "B"})], reported_usage(input=20, output=1, total=21)),
+        Turn([reply_step("Both found.")], reported_usage(input=30, output=5, total=35)),
+    ))
+
+    with track_usage() as run:
+        await agent.get_complete_reply(tools, [], "look up A and B", SPEC)
+
+    assert run == Usage(calls=3, input_tokens=60, output_tokens=7, total_tokens=67)

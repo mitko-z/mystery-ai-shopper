@@ -10,6 +10,7 @@ from google.genai import types
 
 from core import config
 from core.app_types import Tools, Step, History
+from core.usage import record
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
     and every step the agent produced: `thought`, `function_call` and
     `model_output`. The agent's text reply is the `model_output` step(s) at the
     end, and the tools it wants are the `function_call` steps after the last
-    `user_input`. The tools are not executed here.
+    `user_input`. The tools are not executed here. Each call to the Gemini API
+    is recorded in `core.usage`.
 
     Args:
         history: The conversation so far, as interaction steps. Appended to in
@@ -92,6 +94,8 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
         system_instruction=spec.system_instruction,
         tools=spec.tool_schemas,
     )
+
+    record(interaction.usage)
 
     if not interaction.steps:
         raise ValueError("No steps found in the interaction response.")
