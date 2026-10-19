@@ -46,13 +46,20 @@ def test_a_call_without_a_report_is_counted_and_flagged():
     assert usage == Usage(calls=1, calls_without_usage=1)
 
 
-def test_a_missing_count_in_a_report_is_zero():
+@pytest.mark.parametrize("missing", ["input", "output", "thought", "total"])
+def test_a_missing_count_in_a_report_is_zero(missing):
+    """The API may leave out any one count of a report. It then adds 0 and the others still add."""
+    counts: dict[str, int | None] = {"input": 100, "output": 20, "thought": 30, "total": 150}
+    counts[missing] = None
     usage = Usage()
 
-    usage.add(reported_usage(input=100, total=100))
+    usage.add(reported_usage(**counts))
 
-    assert usage == Usage(calls=1, input_tokens=100, total_tokens=100)
-    assert usage.calls_without_usage == 0
+    expected = Usage(
+        calls=1, input_tokens=100, output_tokens=20, thought_tokens=30, total_tokens=150
+    )
+    setattr(expected, f"{missing}_tokens", 0)
+    assert usage == expected
 
 
 def test_record_in_a_tracked_run_counts_into_the_run_and_the_grand_total():
