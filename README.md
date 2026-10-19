@@ -12,7 +12,7 @@ Everything specific to the system under test (here a fake shop and its support a
 | `targets/` | One module per system under test: how to reach it and which scenarios to run against it. `targets/shop.py` is the entry for the fake shop. |
 | `shop/` | The fake shop and everything that belongs to it: `store.py` and `seed.py` (the shop), `support_agent.py` (the agent's prompt and tools), `session.py` (one conversation with the agent), `app.py` (the HTTP API), `static/` (the demo page) and `tests/` (their tests). |
 
-`core` imports nothing else from this project. `shop` and `evaluator` both depend on `core` only, never on each other, so the tester can be pointed at a system that is not this shop. Only a module in `targets/` knows both a system and the evaluator. The tester treats the system as a black box: all it needs is a way to send a message and get a reply.
+`core` imports nothing else from this project. `shop` and `evaluator` both depend on `core` only, never on each other, so the tester can be pointed at a system that is not this shop. Only a module in `targets/` knows both a system and the evaluator. `tests/test_import_rules.py` checks these import rules, so a stray import fails the tests. The tester treats the system as a black box: all it needs is a way to send a message and get a reply.
 
 ## Setup
 
@@ -121,4 +121,4 @@ uv run pytest
 
 The tests use a scripted fake in place of Gemini, so they need no API key and make no network calls.
 
-Tests sit next to what they test: `tests/` holds the tests of the testing tool (`core`, and later `evaluator`) and the fakes they share (`tests/fakes.py`), and `shop/tests/` holds the tests of the fake shop and its support agent. `uv run pytest` runs both; add a folder name to run one, e.g. `uv run pytest shop/tests`.
+Tests sit next to what they test: `tests/` holds the tests of the testing tool (`core`, and `evaluator`) and the fakes they share (`tests/fakes.py`), and `shop/tests/` holds the tests of the fake shop and its support agent. `uv run pytest` runs both; add a folder name to run one, e.g. `uv run pytest shop/tests`.
