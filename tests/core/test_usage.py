@@ -2,8 +2,17 @@ import asyncio
 
 import pytest
 
+from core import config
 from core import usage as usage_module
-from core.usage import Usage, grand_total, record, record_cancelled, track_usage
+from core.usage import (
+    Usage,
+    current_call_limit_reached,
+    current_max_calls,
+    grand_total,
+    record,
+    record_cancelled,
+    track_usage,
+)
 from tests.fakes import reported_usage
 
 
@@ -146,3 +155,59 @@ def test_record_cancelled_outside_a_run_counts_only_into_the_grand_total():
     record_cancelled()
 
     assert grand_total() == Usage(calls_cancelled=1)
+
+
+# --- the call limit ---
+
+def test_no_limit_applies_when_no_run_is_tracked():
+    assert current_max_calls() is None
+    assert current_call_limit_reached() is False
+
+
+def test_a_tracked_run_has_the_default_limit_unless_given_another():
+    with track_usage():
+        assert current_max_calls() == config.DEFAULT_CALLS_PER_RUN
+
+    with track_usage(max_calls=5):
+        assert current_max_calls() == 5
+
+
+def test_the_limit_is_reached_when_the_run_has_made_that_many_calls():
+    with track_usage(max_calls=2):
+        record(reported_usage(total=1))
+        assert current_call_limit_reached() is False
+
+        record(reported_usage(total=1))
+        assert current_call_limit_reached() is True
+
+
+def test_cancelled_calls_count_toward_the_limit():
+    with track_usage(max_calls=2):
+        record(reported_usage(total=1))
+        record_cancelled()
+
+        assert current_call_limit_reached() is True
+
+
+def test_the_limit_ends_with_the_run_also_when_it_fails():
+    with pytest.raises(RuntimeError):
+        with track_usage(max_calls=1):
+            raise RuntimeError("the run failed")
+
+    assert current_max_calls() is None
+    assert current_call_limit_reached() is False
+
+
+@pytest.mark.anyio
+async def test_concurrent_runs_have_limits_of_their_own():
+    async def run(max_calls, calls):
+        with track_usage(max_calls=max_calls):
+            for _ in range(calls):
+                record(reported_usage(total=1))
+                await asyncio.sleep(0)  # let the other run count in between
+            return current_call_limit_reached()
+
+    first_reached, second_reached = await asyncio.gather(run(2, 2), run(5, 2))
+
+    assert first_reached is True
+    assert second_reached is False

@@ -11,7 +11,7 @@ from google.genai import types
 
 from core import config
 from core.app_types import Tools, Step, History
-from core.usage import record, record_cancelled
+from core.usage import current_call_limit_reached, current_max_calls, record, record_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,10 @@ class TurnLimitError(Exception):
     a final answer.
     """
     pass
+
+
+class CallLimitError(Exception):
+    """Raised when a run has made all the model calls it may make."""
 
 
 @functools.cache
@@ -83,9 +87,14 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
         spec: The agent's system instruction, tool schemas and model.
 
     Raises:
+        CallLimitError: If the run being tracked has made as many model calls as
+            it may. Nothing is sent to the model then.
         config.MissingAPIKeyError: If the API key is not set.
         ValueError: If the interaction response contains no steps.
     """
+    if current_call_limit_reached():
+        raise CallLimitError(f"This run reached its limit of {current_max_calls()} model calls.")
+
     new_input = []
     if user_message is not None:
         new_input.append({"type": "user_input", "content": [{"type": "text", "text": user_message}]})

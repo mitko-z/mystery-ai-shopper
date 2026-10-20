@@ -193,7 +193,7 @@ def get_scenario(target_module: ModuleType, name: str) -> Scenario:
     return scenarios[name]
 
 
-async def _run(target_name: str, scenario_name: str) -> None:
+async def _run(target_name: str, scenario_name: str, max_calls: int) -> None:
     """Run one scenario and print the conversation as it happens.
 
     The outcome, if the run reached one, and what the run cost are printed at the
@@ -203,7 +203,7 @@ async def _run(target_name: str, scenario_name: str) -> None:
     scenario = get_scenario(target_module, scenario_name)
     print(format_header(scenario))
     transcript = Transcript()
-    with track_usage() as usage:
+    with track_usage(max_calls) as usage:
         try:
             async with target_module.open_target() as target:
                 await run_scenario(target, scenario, transcript, on_message=lambda m: print(format_message(m)))
@@ -226,14 +226,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("target", help=f"name of a module in the `{TARGETS_PACKAGE}` package, e.g. shop")
     parser.add_argument("scenario", help="name of one of the target's scenarios, e.g. refund_o1002")
+    parser.add_argument("--max-calls", help="most model calls one run may make (default: 60)", type=int, default=config.DEFAULT_CALLS_PER_RUN)
     args = parser.parse_args(argv)
+
+    if args.max_calls < 1:
+        parser.error("--max-calls must be at least 1")
 
     # Model text can hold characters the Windows console codepage cannot print.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     try:
-        asyncio.run(_run(args.target, args.scenario))
+        asyncio.run(_run(args.target, args.scenario, args.max_calls))
     except (
         UsageError,
         TargetError,
@@ -242,6 +246,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         agent_loop.TurnLimitError,
         genai_errors.APIError,
         httpx.HTTPError,
+        agent_loop.CallLimitError,
     ) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

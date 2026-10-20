@@ -4,6 +4,9 @@ import os
 
 API_KEY_ENV_VAR = "GEMINI_API_KEY"
 
+# The most model calls one run may make, unless the caller asks for another limit.
+DEFAULT_CALLS_PER_RUN = 60
+
 
 class MissingAPIKeyError(RuntimeError):
     """Raised when the GEMINI API key is not set in the environment."""

@@ -428,3 +428,65 @@ async def test_a_call_cancelled_by_a_timeout_is_counted_apart(agent, monkeypatch
 
     assert run == Usage(calls_cancelled=1)
     assert history == []
+
+
+# --- the call limit ---
+
+async def test_a_run_that_used_up_its_calls_cannot_make_another(agent, monkeypatch):
+    """The limit is checked before the model is called, so a refused call costs nothing."""
+    fake = ScriptedInteractions([reply_step("one")], [reply_step("two")])
+    use_fake(monkeypatch, fake)
+    history = []
+
+    with track_usage(max_calls=2) as run:
+        await agent.run_turn(history, "a", SPEC)
+        await agent.run_turn(history, "b", SPEC)
+        with pytest.raises(agent.CallLimitError, match="limit of 2 model calls"):
+            await agent.run_turn(history, "c", SPEC)
+
+    assert len(fake.calls) == 2
+    assert run.calls == 2
+    assert history == [user_step("a"), reply_step("one"), user_step("b"), reply_step("two")]
+
+
+async def test_a_cancelled_call_counts_toward_the_limit(agent, monkeypatch):
+    """A call that a timeout cancelled was probably billed, so it uses up a call too."""
+    use_fake(monkeypatch, HangingInteractions())
+
+    with track_usage(max_calls=1):
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await agent.run_turn([], "hi", SPEC)
+        with pytest.raises(agent.CallLimitError):
+            # The fake never answers: without a limit this call would hang, so guard it
+            # and let a missing limit fail the test instead.
+            async with asyncio.timeout(1):
+                await agent.run_turn([], "again", SPEC)
+
+
+async def test_the_limit_stops_a_tool_loop_and_says_why(agent, tools, monkeypatch):
+    """The caller sees the call limit, not a turn-limit error that would hide the reason."""
+    fake = ScriptedInteractions(
+        [call_step("c1", "lookup", {"key": "A"})],
+        [call_step("c2", "lookup", {"key": "B"})],
+        [reply_step("Both found.")],
+    )
+    use_fake(monkeypatch, fake)
+
+    with track_usage(max_calls=2):
+        with pytest.raises(agent.CallLimitError):
+            await agent.get_complete_reply(tools, [], "look up A and B", SPEC)
+
+    assert len(fake.calls) == 2
+
+
+async def test_without_a_tracked_run_there_is_no_limit(agent, monkeypatch):
+    """Code that does not track usage, such as the shop server on its own, is never refused."""
+    fake = FakeInteractions(steps=[FakeStep(**reply_step("Hello!"))])
+    use_fake(monkeypatch, fake)
+    calls = config.DEFAULT_CALLS_PER_RUN + 1
+
+    for _ in range(calls):
+        await agent.run_turn([], "hi", SPEC)
+
+    assert len(fake.calls) == calls

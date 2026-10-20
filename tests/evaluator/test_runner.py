@@ -5,7 +5,7 @@ from types import ModuleType
 
 import pytest
 
-from core import agent_loop
+from core import agent_loop, config
 from core.usage import Usage
 from evaluator import runner
 from evaluator.customer import CustomerError
@@ -334,3 +334,47 @@ def test_format_usage_names_cancelled_calls():
     usage = Usage(calls=3, input_tokens=100, total_tokens=100, calls_cancelled=1)
 
     assert runner.format_usage(usage).endswith(" | Calls cancelled (tokens unknown): 1")
+
+
+# --- the call limit ---
+
+def test_main_stops_a_run_that_reaches_the_call_limit(monkeypatch, capsys):
+    """The run ends as an error; what was said and what it cost are still shown."""
+    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
+    fake_target_module(monkeypatch, StubTarget("Hello"))
+
+    code = runner.main(["fake", "refund", "--max-calls", "2"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.strip() == "error: This run reached its limit of 2 model calls."
+    assert "1. Customer: Hi" in captured.out
+    assert "2. Agent: Hello" in captured.out
+    assert "Model calls: 2" in captured.out
+    assert "Outcome:" not in captured.out
+
+
+@pytest.mark.parametrize("value", ["0", "-3"])
+def test_main_rejects_a_call_limit_below_one(value, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        runner.main(["fake", "refund", "--max-calls", value])
+
+    assert exit_info.value.code == 2
+    assert "--max-calls must be at least 1" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "extra_args, expected",
+    [([], config.DEFAULT_CALLS_PER_RUN), (["--max-calls", "7"], 7)],
+)
+def test_main_gives_the_run_its_call_limit(extra_args, expected, monkeypatch):
+    seen = {}
+
+    async def fake_run(target_name, scenario_name, max_calls):
+        seen["max_calls"] = max_calls
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+
+    runner.main(["fake", "refund", *extra_args])
+
+    assert seen == {"max_calls": expected}

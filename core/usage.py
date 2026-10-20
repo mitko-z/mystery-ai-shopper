@@ -8,6 +8,8 @@ from typing import Optional
 
 from google.genai.interactions import Usage as ReportedUsage
 
+from core import config
+
 
 @dataclass
 class Usage:
@@ -60,26 +62,34 @@ class Usage:
 
 
 _current: ContextVar[Optional[Usage]] = ContextVar("current_usage", default=None)
+_current_max_calls: ContextVar[Optional[int]] = ContextVar("current_max_calls", default=None)
 _grand_total = Usage()
 
 
 @contextmanager
-def track_usage() -> Generator[Usage]:
+def track_usage(max_calls: int = config.DEFAULT_CALLS_PER_RUN) -> Generator[Usage]:
     """Start counting a run: calls made in the block are added to the yielded Usage.
 
     Enter it inside the coroutine of each run, not around the code that starts
     the runs. A new task copies the context it is created in, so runs started
     under one `track_usage()` would all share its Usage.
 
+    Args:
+        max_calls: The most model calls the run may make. Cancelled calls count
+            too. Once the run has made that many, the next call raises
+            `agent_loop.CallLimitError`.
+
     Yields:
         A fresh Usage for this run. It stays readable after the block ends.
     """
     usage = Usage()
-    token = _current.set(usage)
+    max_calls_token = _current_max_calls.set(max_calls)
+    usage_token = _current.set(usage)
     try:
         yield usage
     finally:
-        _current.reset(token)
+        _current.reset(usage_token)
+        _current_max_calls.reset(max_calls_token)
 
 
 def record(reported: Optional[ReportedUsage]) -> None:
@@ -113,3 +123,28 @@ def grand_total() -> Usage:
         The live total, not a copy.
     """
     return _grand_total
+
+
+def current_call_limit_reached() -> bool:
+    """Say whether the current run has used up the model calls it may make.
+
+    Calls that got a response and cancelled calls both count.
+
+    Returns:
+        True if the run has made as many calls as it may. False if it has not,
+        or if no run is tracked: then there is no limit.
+    """
+    usage = _current.get()
+    limit = _current_max_calls.get()
+    if usage is None or limit is None:
+        return False
+    return usage.calls + usage.calls_cancelled >= limit
+
+
+def current_max_calls() -> Optional[int]:
+    """The most model calls the current run may make.
+
+    Returns:
+        The limit, or None if no run is tracked.
+    """
+    return _current_max_calls.get()
