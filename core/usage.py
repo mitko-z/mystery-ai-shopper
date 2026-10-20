@@ -24,6 +24,9 @@ class Usage:
         total_tokens: Tokens in all, as the API counts them.
         calls_without_usage: Calls whose response had no usage report at all. The
             token totals miss these, so a low total is only trustworthy when this is 0.
+        calls_cancelled: Calls abandoned before a response came, e.g. by a timeout.
+            They are likely billed but their tokens are unknown, so the token
+            totals miss these too. Not part of `calls`.
     """
 
     calls: int = 0
@@ -32,6 +35,7 @@ class Usage:
     thought_tokens: int = 0
     total_tokens: int = 0
     calls_without_usage: int = 0
+    calls_cancelled: int = 0
 
     def add(self, reported: Optional[ReportedUsage]) -> None:
         """Count one model call that got a response.
@@ -49,6 +53,10 @@ class Usage:
         self.output_tokens += reported.total_output_tokens or 0
         self.thought_tokens += reported.total_thought_tokens or 0
         self.total_tokens += reported.total_tokens or 0
+
+    def add_cancelled(self) -> None:
+        """Count one model call that was abandoned before a response came."""
+        self.calls_cancelled += 1
 
 
 _current: ContextVar[Optional[Usage]] = ContextVar("current_usage", default=None)
@@ -87,10 +95,21 @@ def record(reported: Optional[ReportedUsage]) -> None:
         current.add(reported)
 
 
+def record_cancelled() -> None:
+    """Count one model call that was abandoned before a response came.
+
+    It goes into the grand total and, if a run is tracked, into its Usage.
+    """
+    _grand_total.add_cancelled()
+    current = _current.get()
+    if current is not None:
+        current.add_cancelled()
+
+
 def grand_total() -> Usage:
     """Everything counted in this process, whether or not a run was tracked.
 
     Returns:
         The live total, not a copy.
     """
-    return _grand_total
+    return _grand_total

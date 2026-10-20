@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -406,3 +407,24 @@ async def test_every_turn_of_a_tool_loop_is_counted(agent, tools, monkeypatch):
         await agent.get_complete_reply(tools, [], "look up A and B", SPEC)
 
     assert run == Usage(calls=3, input_tokens=60, output_tokens=7, total_tokens=67)
+
+
+class HangingInteractions:
+    """Stands in for `client.aio.interactions`; a call never answers, as when the server is too slow."""
+
+    async def create(self, **kwargs):
+        await asyncio.Event().wait()
+
+
+async def test_a_call_cancelled_by_a_timeout_is_counted_apart(agent, monkeypatch):
+    """The call in flight when a timeout fires got no response, so its tokens are unknown."""
+    use_fake(monkeypatch, HangingInteractions())
+    history = []
+
+    with track_usage() as run:
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await agent.run_turn(history, "hi", SPEC)
+
+    assert run == Usage(calls_cancelled=1)
+    assert history == []

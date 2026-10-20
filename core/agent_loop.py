@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import json
 import logging
@@ -10,7 +11,7 @@ from google.genai import types
 
 from core import config
 from core.app_types import Tools, Step, History
-from core.usage import record
+from core.usage import record, record_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +89,19 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
     new_input = []
     if user_message is not None:
         new_input.append({"type": "user_input", "content": [{"type": "text", "text": user_message}]})
-    interaction = await _get_client().aio.interactions.create(
-        model=spec.model,
-        input=[*history, *new_input],
-        system_instruction=spec.system_instruction,
-        tools=spec.tool_schemas,
-    )
+
+    try:
+        interaction = await _get_client().aio.interactions.create(
+            model=spec.model,
+            input=[*history, *new_input],
+            system_instruction=spec.system_instruction,
+            tools=spec.tool_schemas,
+        )
+    except asyncio.CancelledError:
+        # E.g. a timeout hung up on the call. No response will come, so its tokens
+        # are unknown, but it is likely billed. Count it, and let the cancel go on.
+        record_cancelled()
+        raise
 
     record(interaction.usage)
 

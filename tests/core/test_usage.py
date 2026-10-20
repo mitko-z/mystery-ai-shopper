@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from core import usage as usage_module
-from core.usage import Usage, grand_total, record, track_usage
+from core.usage import Usage, grand_total, record, record_cancelled, track_usage
 from tests.fakes import reported_usage
 
 
@@ -124,3 +124,25 @@ async def test_a_task_started_inside_a_run_counts_into_that_run():
         await asyncio.create_task(child())
 
     assert run == Usage(calls=1, input_tokens=10, total_tokens=10)
+
+
+def test_add_cancelled_counts_the_call_apart_from_the_answered_ones():
+    usage = Usage()
+
+    usage.add_cancelled()
+
+    assert usage == Usage(calls_cancelled=1)
+
+
+def test_record_cancelled_counts_into_the_run_and_the_grand_total():
+    with track_usage() as run:
+        record_cancelled()
+
+    assert run == Usage(calls_cancelled=1)
+    assert grand_total() == run
+
+
+def test_record_cancelled_outside_a_run_counts_only_into_the_grand_total():
+    record_cancelled()
+
+    assert grand_total() == Usage(calls_cancelled=1)

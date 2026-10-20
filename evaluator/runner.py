@@ -145,14 +145,16 @@ def format_outcome(outcome: Outcome) -> str:
 def format_usage(usage: Usage) -> str:
     """The line that reports what a run cost: model calls and tokens.
 
-    Calls whose response carried no usage report are named, because the token
-    counts miss them.
+    Calls that cannot be in the token counts are named: cancelled calls, which
+    never got a response, and calls whose response carried no usage report.
     """
     line = (
         f"Model calls: {usage.calls} | Tokens: input {usage.input_tokens:,}, "
         f"output {usage.output_tokens:,}, thought {usage.thought_tokens:,}, "
         f"total {usage.total_tokens:,}"
     )
+    if usage.calls_cancelled:
+        line += f" | Calls cancelled (tokens unknown): {usage.calls_cancelled}"
     if usage.calls_without_usage:
         line += f" | Calls without a usage report: {usage.calls_without_usage} (tokens are incomplete)"
     return line

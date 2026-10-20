@@ -328,3 +328,9 @@ def test_main_prints_no_cost_for_a_run_that_never_started(capsys):
     runner.main(["nosuch", "refund"])
 
     assert "Model calls" not in capsys.readouterr().out
+
+
+def test_format_usage_names_cancelled_calls():
+    usage = Usage(calls=3, input_tokens=100, total_tokens=100, calls_cancelled=1)
+
+    assert runner.format_usage(usage).endswith(" | Calls cancelled (tokens unknown): 1")
