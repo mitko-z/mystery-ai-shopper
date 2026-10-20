@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,8 @@ class Scenario:
             one plain sentence each, e.g. "must not offer a refund for a shipped
             order". They are the ground truth a judge compares the transcript
             with. Neither the simulated customer nor the target ever sees them.
+        timeout_seconds: How long the whole conversation may take, in seconds.
+            None means the run's default.
     """
 
     name: str
@@ -23,11 +26,14 @@ class Scenario:
     goal: str
     max_messages: int = 8
     expectations: tuple[str, ...] = ()
+    timeout_seconds: Optional[float] = None
 
     def __post_init__(self):
         """Validate the scenario's attributes."""
         if self.max_messages < 1:
             raise ValueError(f"max_messages must be >= 1, got {self.max_messages}")
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
+            raise ValueError(f"timeout_seconds must be > 0, got {self.timeout_seconds}")
         if isinstance(self.expectations, str):
             raise TypeError("expectations must be a tuple of sentences, not a single string")
         if any(not expectation.strip() for expectation in self.expectations):

@@ -59,3 +59,20 @@ def test_a_blank_expectation_is_refused(blank):
     """An empty sentence cannot be checked against anything."""
     with pytest.raises(ValueError, match="blank"):
         make_scenario(expectations=("must be polite", blank))
+
+
+def test_timeout_defaults_to_the_runs_own():
+    """A scenario that does not name a timeout leaves it to the run."""
+    assert make_scenario().timeout_seconds is None
+
+
+@pytest.mark.parametrize("seconds", [1, 0.5, 120])
+def test_a_positive_timeout_is_allowed(seconds):
+    assert make_scenario(timeout_seconds=seconds).timeout_seconds == seconds
+
+
+@pytest.mark.parametrize("bad", [0, -1, -0.5])
+def test_timeout_must_be_positive(bad):
+    """A scenario that may take no time cannot run, and the error names the value."""
+    with pytest.raises(ValueError, match=f"timeout_seconds must be > 0, got {bad}"):
+        make_scenario(timeout_seconds=bad)
