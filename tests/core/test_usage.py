@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -211,3 +212,23 @@ async def test_concurrent_runs_have_limits_of_their_own():
 
     assert first_reached is True
     assert second_reached is False
+
+
+def test_usage_becomes_a_plain_dict_with_every_count():
+    usage = Usage(
+        calls=3, input_tokens=100, output_tokens=20, thought_tokens=30, total_tokens=150,
+        calls_without_usage=1, calls_cancelled=2,
+    )
+
+    as_dict = usage.to_dict()
+
+    assert as_dict == {
+        "calls": 3,
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "thought_tokens": 30,
+        "total_tokens": 150,
+        "calls_without_usage": 1,
+        "calls_cancelled": 2,
+    }
+    assert json.loads(json.dumps(as_dict)) == as_dict

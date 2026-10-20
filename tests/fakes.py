@@ -30,6 +30,16 @@ class Turn:
     usage: Optional[ReportedUsage] = None
 
 
+class FakeHttpError(Exception):
+    """Stands in for an HTTP error of the model API: a status code and the response headers."""
+
+    def __init__(self, status_code, retry_after=None):
+        super().__init__(f"Error code: {status_code}")
+        self.status_code = status_code
+        headers = {} if retry_after is None else {"retry-after": str(retry_after)}
+        self.response = SimpleNamespace(headers=headers)
+
+
 class FakeStep:
     """Stands in for an SDK step: only `model_dump` is used by the agent."""
 
@@ -56,19 +66,24 @@ class ScriptedInteractions:
     """Stands in for `client.aio.interactions`; answers each call with the next scripted turn.
 
     Each turn is a list of step dicts, or a `Turn` when the response should also
-    carry a usage report. Calling the model more often than the test scripted
-    fails the test, so a runaway loop cannot hang it.
+    carry a usage report, or an exception, which the call then raises. Calling
+    the model more often than the test scripted fails the test, so a runaway
+    loop cannot hang it.
     """
 
     def __init__(self, *turns):
         self.calls = []
-        self._turns = [turn if isinstance(turn, Turn) else Turn(turn) for turn in turns]
+        self._turns = [
+            turn if isinstance(turn, (Turn, Exception)) else Turn(turn) for turn in turns
+        ]
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
         if len(self.calls) > len(self._turns):
             raise AssertionError("the model was called more often than the test scripted")
         turn = self._turns[len(self.calls) - 1]
+        if isinstance(turn, Exception):
+            raise turn
         steps = [FakeStep(**step) for step in turn.steps]
         return SimpleNamespace(steps=steps, usage=turn.usage)
 

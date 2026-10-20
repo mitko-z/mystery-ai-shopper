@@ -1,11 +1,13 @@
 import asyncio
 import datetime
+import decimal
+import json
 
 import pytest
 
 from core import agent_loop
 from core.agent_loop import AgentSpec
-from core.tool_recorder import recording
+from core.tool_recorder import ToolCall, recording
 from tests.fakes import ScriptedInteractions, call_step, reply_step, result_of, stub_tools, use_fake
 
 pytestmark = pytest.mark.anyio       # every test here is async
@@ -202,3 +204,122 @@ async def test_call_log_does_not_change_what_the_agent_sees(monkeypatch):
     recorded = await converse(recording(stub_tools([]), []))
 
     assert recorded == plain
+
+
+# --- the JSON-safe form ---
+
+STARTED = datetime.datetime(2026, 10, 20, 9, 30, 0, 123456, tzinfo=datetime.timezone.utc)
+
+
+def make_call(**overrides):
+    """A tool call with placeholder values; `overrides` replace single fields."""
+    fields = {
+        "name": "get_order",
+        "arguments": {"order_id": "O1001"},
+        "result": {"ok": True, "status": "shipped"},
+        "started_at": STARTED,
+        "duration": 0.25,
+    }
+    return ToolCall(**{**fields, **overrides})
+
+
+def test_a_call_becomes_a_plain_dict():
+    as_dict = make_call().to_dict()
+
+    assert as_dict == {
+        "name": "get_order",
+        "arguments": {"order_id": "O1001"},
+        "result": {"ok": True, "status": "shipped"},
+        "started_at": "2026-10-20T09:30:00.123456+00:00",
+        "duration": 0.25,
+        "error": None,
+    }
+    assert json.loads(json.dumps(as_dict)) == as_dict
+
+
+def test_a_failed_call_keeps_its_error():
+    as_dict = make_call(result=None, error="ValueError: bad x").to_dict()
+
+    assert as_dict["result"] is None
+    assert as_dict["error"] == "ValueError: bad x"
+
+
+@pytest.mark.parametrize("result", [5, "text", None, True, [1, "a", None], {"a": {"b": [1.5]}}])
+def test_a_result_that_json_can_hold_is_kept_as_it_is(result):
+    assert make_call(result=result).to_dict()["result"] == result
+
+
+def test_a_tuple_becomes_a_list():
+    assert make_call(result=("a", 1)).to_dict()["result"] == ["a", 1]
+
+
+def test_what_json_cannot_hold_becomes_text():
+    class Order:
+        def __str__(self):
+            return "order O1001"
+
+    result = {
+        "when": STARTED,
+        "price": decimal.Decimal("9.99"),
+        "tags": {"fragile"},
+        "order": Order(),
+        "nested": [{"when": STARTED}],
+    }
+
+    as_dict = make_call(result=result).to_dict()
+
+    assert as_dict["result"] == {
+        "when": "2026-10-20T09:30:00.123456+00:00",
+        "price": "9.99",
+        "tags": "{'fragile'}",
+        "order": "order O1001",
+        "nested": [{"when": "2026-10-20T09:30:00.123456+00:00"}],
+    }
+    json.dumps(as_dict)
+
+
+def test_arguments_are_made_safe_in_the_same_way():
+    as_dict = make_call(arguments={"since": STARTED}).to_dict()
+
+    assert as_dict["arguments"] == {"since": "2026-10-20T09:30:00.123456+00:00"}
+
+
+def test_a_result_that_cannot_be_converted_piece_by_piece_becomes_text():
+    """A dict with tuple keys is not JSON at all. It must not stop the file from being written."""
+    as_dict = make_call(result={("a", 1): "x"}).to_dict()
+
+    assert as_dict["result"] == "{('a', 1): 'x'}"
+    json.dumps(as_dict)
+
+
+def test_a_result_that_contains_itself_becomes_text():
+    loop = {}
+    loop["me"] = loop
+
+    as_dict = make_call(result=loop).to_dict()
+
+    assert isinstance(as_dict["result"], str)
+    json.dumps(as_dict)
+
+
+def test_the_dict_is_a_copy_that_later_changes_do_not_reach():
+    call = make_call(arguments={"order_id": "O1001"})
+    as_dict = call.to_dict()
+
+    call.arguments["order_id"] = "changed"
+
+    assert as_dict["arguments"] == {"order_id": "O1001"}
+
+
+async def test_a_recorded_log_can_be_written_as_json():
+    async def get_order(order_id):
+        return {"ok": True, "order_id": order_id, "placed": STARTED}
+
+    log = []
+    tools = recording({"get_order": get_order}, log)
+    await tools["get_order"](order_id="O1001")
+
+    written = json.loads(json.dumps([call.to_dict() for call in log]))
+
+    assert written[0]["name"] == "get_order"
+    assert written[0]["result"]["placed"] == "2026-10-20T09:30:00.123456+00:00"

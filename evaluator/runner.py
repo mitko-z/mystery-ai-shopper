@@ -44,6 +44,14 @@ class Message:
     speaker: Speaker
     text: str
 
+    def to_dict(self) -> dict[str, object]:
+        """The message as a plain dict, ready for JSON.
+
+        The speaker is a stable lowercase key, `customer` or `agent`, not the
+        text used when the conversation is printed.
+        """
+        return {"number": self.number, "speaker": self.speaker.name.lower(), "text": self.text}
+
 
 @dataclass
 class Transcript:

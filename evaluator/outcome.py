@@ -21,3 +21,7 @@ class Outcome:
 
     kind: OutcomeKind
     reason: str
+
+    def to_dict(self) -> dict[str, str]:
+        """The outcome as a plain dict, ready for JSON."""
+        return {"kind": self.kind.value, "reason": self.reason}

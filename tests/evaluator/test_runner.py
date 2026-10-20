@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType
@@ -10,10 +11,18 @@ from core.usage import Usage
 from evaluator import runner
 from evaluator.customer import CustomerError
 from evaluator.outcome import Outcome, OutcomeKind
-from evaluator.runner import Speaker, Transcript, run_scenario
+from evaluator.runner import Message, Speaker, Transcript, run_scenario
 from evaluator.scenario import Scenario
 from evaluator.target import Target, TargetError
-from tests.fakes import ScriptedInteractions, Turn, call_step, reply_step, reported_usage, use_fake
+from tests.fakes import (
+    FakeHttpError,
+    ScriptedInteractions,
+    Turn,
+    call_step,
+    reply_step,
+    reported_usage,
+    use_fake,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -378,3 +387,32 @@ def test_main_gives_the_run_its_call_limit(extra_args, expected, monkeypatch):
     runner.main(["fake", "refund", *extra_args])
 
     assert seen == {"max_calls": expected}
+
+
+# --- a model that fails ---
+
+def test_main_reports_a_failing_model_in_one_line(monkeypatch, capsys):
+    """When the model keeps failing, the run ends with a short message, not a traceback."""
+    use_fake(monkeypatch, ScriptedInteractions(*[FakeHttpError(503) for _ in range(4)]))
+    fake_target_module(monkeypatch, StubTarget("Hello"))
+
+    code = runner.main(["fake", "refund"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error: The model call failed:")
+    assert "Model calls: 0" in captured.out
+
+
+# --- the JSON-safe form ---
+
+@pytest.mark.parametrize(
+    "speaker, key", [(Speaker.CUSTOMER, "customer"), (Speaker.AGENT, "agent")]
+)
+def test_a_message_becomes_a_plain_dict(speaker, key):
+    """The speaker is a lowercase key, not the text used when the conversation is printed."""
+    as_dict = Message(3, speaker, "Hello").to_dict()
+
+    assert as_dict == {"number": 3, "speaker": key, "text": "Hello"}
+    assert type(as_dict["speaker"]) is str
+    assert json.loads(json.dumps(as_dict)) == as_dict

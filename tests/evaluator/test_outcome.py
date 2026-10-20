@@ -1,3 +1,4 @@
+import json
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -31,3 +32,12 @@ def test_outcome_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         outcome.kind = OutcomeKind.GOAL_ACHIEVED
+
+
+def test_outcome_becomes_a_plain_dict():
+    """The kind is its plain string, so the dict can be written as JSON."""
+    as_dict = Outcome(OutcomeKind.GAVE_UP, "Refused.").to_dict()
+
+    assert as_dict == {"kind": "gave_up", "reason": "Refused."}
+    assert type(as_dict["kind"]) is str
+    assert json.loads(json.dumps(as_dict)) == as_dict

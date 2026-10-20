@@ -3,7 +3,7 @@
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Optional
 
 from google.genai.interactions import Usage as ReportedUsage
@@ -59,6 +59,10 @@ class Usage:
     def add_cancelled(self) -> None:
         """Count one model call that was abandoned before a response came."""
         self.calls_cancelled += 1
+
+    def to_dict(self) -> dict[str, int]:
+        """The counts as a plain dict, ready for JSON."""
+        return asdict(self)
 
 
 _current: ContextVar[Optional[Usage]] = ContextVar("current_usage", default=None)
