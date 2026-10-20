@@ -13,6 +13,7 @@ from core.usage import Usage, track_usage
 from tests.fakes import (
     FakeInteractions,
     FakeStep,
+    HangingInteractions,
     ScriptedInteractions,
     Turn,
     call_step,
@@ -407,13 +408,6 @@ async def test_every_turn_of_a_tool_loop_is_counted(agent, tools, monkeypatch):
         await agent.get_complete_reply(tools, [], "look up A and B", SPEC)
 
     assert run == Usage(calls=3, input_tokens=60, output_tokens=7, total_tokens=67)
-
-
-class HangingInteractions:
-    """Stands in for `client.aio.interactions`; a call never answers, as when the server is too slow."""
-
-    async def create(self, **kwargs):
-        await asyncio.Event().wait()
 
 
 async def test_a_call_cancelled_by_a_timeout_is_counted_apart(agent, monkeypatch):

@@ -10,23 +10,29 @@
 import argparse
 import asyncio
 import importlib
+import logging
 import pkgutil
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import StrEnum
 from types import ModuleType
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
 from core import agent_loop, config
+from core.tool_recorder import ToolCall
 from core.usage import Usage, track_usage
 from evaluator.customer import CustomerError, SimulatedCustomer
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.scenario import Scenario
 from evaluator.scenario_file import ScenarioFileError
-from evaluator.target import Target, TargetError
+from evaluator.target import Target, TargetError, ToolCallSource
+
+logger = logging.getLogger(__name__)
 
 TARGETS_PACKAGE = "targets"
 
@@ -65,6 +71,75 @@ class Transcript:
 
     messages: list[Message] = field(default_factory=list)
     outcome: Outcome | None = None
+
+
+class RunStatus(StrEnum):
+    """What happened to a run. It is not the customer's outcome: a run that
+    `finished` has an outcome, the other two do not.
+    """
+
+    FINISHED = "finished"
+    TIMED_OUT = "timed_out"
+    FAILED = "failed"
+
+
+@dataclass
+class RunResult:
+    """Everything a run left behind, whether it finished or not.
+
+    Attributes:
+        scenario: The scenario that was played.
+        status: What happened to the run.
+        transcript: What was said. Also kept when the run timed out or failed.
+        usage: The model calls and tokens of this run alone.
+        started_at: When the run began, in UTC.
+        duration_seconds: How long the run took.
+        error: Why the run did not finish. None for a finished run.
+        error_type: The class name of the error, e.g. `TargetError`.
+        tool_calls: The tool calls the target's agent made, for a target that keeps
+            such a log. None means the target keeps none, which is not the same as
+            an empty list: that means the agent called no tools.
+    """
+
+    scenario: Scenario
+    status: RunStatus
+    transcript: Transcript
+    usage: Usage
+    started_at: datetime
+    duration_seconds: float
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    tool_calls: Optional[list[ToolCall]] = None
+
+    @property
+    def outcome(self) -> Optional[Outcome]:
+        """How the customer ended the conversation. None unless the run finished."""
+        return self.transcript.outcome if self.status is RunStatus.FINISHED else None
+
+    def to_dict(self) -> dict[str, Any]:
+        """The result as a plain dict, ready for JSON.
+
+        The scenario's expectations, persona and goal are included, so a judge can
+        read the result without the scenario file. `tool_calls` is left out for a
+        target that keeps no log.
+        """
+        data: dict[str, Any] = {
+            "scenario": self.scenario.name,
+            "persona": self.scenario.persona,
+            "goal": self.scenario.goal,
+            "expectations": list(self.scenario.expectations),
+            "status": self.status.value,
+            "error": self.error,
+            "error_type": self.error_type,
+            "outcome": self.outcome.to_dict() if self.outcome is not None else None,
+            "started_at": self.started_at.isoformat(),
+            "duration_seconds": round(self.duration_seconds, 3),
+            "usage": self.usage.to_dict(),
+            "transcript": [message.to_dict() for message in self.transcript.messages],
+        }
+        if self.tool_calls is not None:
+            data["tool_calls"] = [call.to_dict() for call in self.tool_calls]
+        return data
 
 
 async def run_scenario(
@@ -129,6 +204,94 @@ async def run_scenario(
         f"The conversation reached the limit of {scenario.max_messages} messages.",
     )
     return transcript.outcome
+
+
+def _read_tool_calls(target: Target) -> Optional[list[ToolCall]]:
+    """The target's log of tool calls, or None if it keeps none or cannot be read.
+
+    Reading the log is an extra: when it fails, the run still has its result.
+    """
+    if not isinstance(target, ToolCallSource):
+        return None
+    try:
+        return list(target.tool_calls())
+    except Exception:
+        logger.warning("The target's tool-call log could not be read.", exc_info=True)
+        return None
+
+
+async def run_in_isolation(
+    target_module: ModuleType,
+    scenario: Scenario,
+    *,
+    default_timeout: float,
+    max_calls: int,
+    on_message: Optional[Callable[[Message], None]] = None,
+) -> RunResult:
+    """Play `scenario` on a target of its own, and report how it went. Never raises.
+
+    The run is isolated in both directions. Nothing leaks in: it opens its own
+    target, counts its own model calls, and has its own timeout. Nothing escapes:
+    a timeout or any failure ends only this run and becomes its status, and
+    the transcript, the cost and the tool log are kept. So many runs can go
+    side by side, and one that breaks does not stop the others.
+
+    Only cancellation passes through, so that Ctrl+C still stops the program.
+
+    Args:
+        target_module: A module of the `targets` package, with `open_target()`.
+        scenario: Who the customer is and what they want.
+        default_timeout: Seconds the conversation may take, unless the scenario
+            names a timeout of its own.
+        max_calls: The most model calls the run may make.
+        on_message: Called with each message as soon as it exists.
+
+    Returns:
+        The result of the run: finished, timed out or failed.
+    """
+    timeout = scenario.timeout_seconds if scenario.timeout_seconds is not None else default_timeout
+    transcript = Transcript()
+    tool_calls = None
+    status = RunStatus.FINISHED
+    error = error_type = None
+    started_at = datetime.now(timezone.utc)
+    started = time.perf_counter()
+    limit = asyncio.timeout(timeout)
+
+    with track_usage(max_calls) as usage:
+        try:
+            async with limit:
+                async with target_module.open_target() as target:
+                    try:
+                        await run_scenario(target, scenario, transcript, on_message)
+                    finally:
+                        tool_calls = _read_tool_calls(target)
+        except TimeoutError as e:
+            # A TimeoutError can also come from the target, e.g. a socket. It is
+            # our timeout only if the limit says it ran out.
+            if limit.expired():
+                status = RunStatus.TIMED_OUT
+                error = f"The run took longer than its timeout of {timeout:g} seconds."
+            else:
+                status = RunStatus.FAILED
+                error = str(e) or type(e).__name__
+            error_type = type(e).__name__
+        except Exception as e:
+            status = RunStatus.FAILED
+            error = str(e) or type(e).__name__
+            error_type = type(e).__name__
+
+    return RunResult(
+        scenario=scenario,
+        status=status,
+        transcript=transcript,
+        usage=usage,
+        started_at=started_at,
+        duration_seconds=time.perf_counter() - started,
+        error=error,
+        error_type=error_type,
+        tool_calls=tool_calls,
+    )
 
 
 def format_header(scenario: Scenario) -> str:

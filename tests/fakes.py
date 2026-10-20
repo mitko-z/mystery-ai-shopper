@@ -1,5 +1,6 @@
 """Stand-ins for the Gemini client and for tools, shared by the tests."""
 
+import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Optional
@@ -86,6 +87,13 @@ class ScriptedInteractions:
             raise turn
         steps = [FakeStep(**step) for step in turn.steps]
         return SimpleNamespace(steps=steps, usage=turn.usage)
+
+
+class HangingInteractions:
+    """Stands in for `client.aio.interactions`; a call never answers, as when the server is too slow."""
+
+    async def create(self, **kwargs):
+        await asyncio.Event().wait()
 
 
 def use_fake(monkeypatch, fake):
