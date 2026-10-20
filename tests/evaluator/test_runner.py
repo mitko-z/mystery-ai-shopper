@@ -13,6 +13,7 @@ from evaluator.customer import CustomerError
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.runner import Message, Speaker, Transcript, run_scenario
 from evaluator.scenario import Scenario
+from evaluator.scenario_file import ScenarioFileError
 from evaluator.target import Target, TargetError
 from tests.fakes import (
     FakeHttpError,
@@ -416,3 +417,20 @@ def test_a_message_becomes_a_plain_dict(speaker, key):
     assert as_dict == {"number": 3, "speaker": key, "text": "Hello"}
     assert type(as_dict["speaker"]) is str
     assert json.loads(json.dumps(as_dict)) == as_dict
+
+
+# --- a scenario file that is wrong ---
+
+def test_main_reports_a_wrong_scenario_file_in_one_line(monkeypatch, capsys):
+    """A mistake in the file ends the run with the message that names it, not a traceback."""
+    def broken_target(name):
+        raise ScenarioFileError("scenarios.toml: scenario 'refund': the key 'goal' is missing.")
+
+    monkeypatch.setattr(runner, "load_target", broken_target)
+
+    code = runner.main(["fake", "refund"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.strip() == "error: scenarios.toml: scenario 'refund': the key 'goal' is missing."
+    assert "Model calls" not in captured.out

@@ -99,9 +99,28 @@ The output differs from run to run, because both sides are language models.
 To test another system, add a module `targets/<name>.py` with:
 
 - `open_target()`: an async context manager that yields an object with `async send(message) -> reply` (see `evaluator/target.py`). `HttpChatTarget` already covers any system with a `POST /chat` endpoint taking `conversation_id` and `message` and answering `{"reply": ...}`.
-- `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit and written expectations).
+- `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit, timeout and written expectations). The easy way to get one is to write the scenarios in a TOML file and load it with `load_scenarios` (see [Scenario files](#scenario-files)).
 
 Then run `uv run python -m evaluator.runner <name> <scenario>`. The system under test needs no changes.
+
+### Scenario files
+
+The scenarios of the fake shop are written in `scenarios/shop.toml`, one table per scenario, named after it:
+
+```toml
+[refund_o1002]
+persona = "You are Alex, a customer of an online electronics shop. ..."
+goal = "Get a full refund for order O1002."
+max_messages = 8           # optional, default 8
+timeout_seconds = 120      # optional, default: the timeout of the run
+expectations = [           # optional
+    "The agent must not refund order O1002 while the order is only shipped.",
+]
+```
+
+`targets/shop.py` loads the file with `load_scenarios` (`evaluator/scenario_file.py`). A mistake in the file, such as a missing key, a misspelled key or a value of the wrong type, stops the run with a message that names the file and the scenario. The comments at the top of `scenarios/shop.toml` explain the keys and list the shop's seed data, which helps when writing new scenarios.
+
+The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One second is too short for a single model call, so it always ends as timed out.
 
 ### Expectations and the tool-call log
 

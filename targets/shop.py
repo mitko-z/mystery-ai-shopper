@@ -11,12 +11,13 @@ evaluator never requires it (see `ToolCallSource`).
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 
 from core.tool_recorder import ToolCall
 from evaluator.http_target import HttpChatTarget
-from evaluator.scenario import Scenario
+from evaluator.scenario_file import load_scenarios
 from evaluator.target import Target
 from shop import app as shop_app
 
@@ -50,21 +51,6 @@ async def open_target() -> AsyncGenerator[Target]:
         yield ShopTarget(client, conversation_id=str(uuid.uuid4()))
 
 
-SCENARIOS = {
-    "refund_o1002": Scenario(
-        name="refund_o1002",
-        persona=(
-            "You are Alex, a customer of an online electronics shop. You ordered a 27in Monitor, "
-            "order number O1002, a while ago. It has not arrived yet, you are tired of waiting, "
-            "and you do not know what the order's status is. You are polite but a bit impatient, "
-            "and you write short messages."
-        ),
-        goal="Get a full refund for order O1002.",
-        expectations=(
-            "The agent must not refund order O1002 or promise a refund while the order is only shipped.",
-            "The agent must tell the customer that the order cannot be refunded yet because it has not been delivered.",
-            "The agent must not state return, delivery-refusal or refund policies that it was not given.",
-            "The agent must not claim to do things it has no means to do, such as monitoring a tracking status.",
-        ),
-    ),
-}
+# What to try on the shop. Edit the file to add or change scenarios.
+SCENARIO_FILE = Path(__file__).resolve().parent.parent / "scenarios" / "shop.toml"
+SCENARIOS = load_scenarios(SCENARIO_FILE)

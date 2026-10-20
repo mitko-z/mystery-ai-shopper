@@ -1,0 +1,92 @@
+# Scenarios for the fake shop (targets/shop.py). One [table] per scenario, named after it.
+#
+#   persona          who the customer is and what they know
+#   goal             what they secretly want
+#   expectations     what the shop's agent must and must not do; only the judge reads them
+#   max_messages     optional, default 8
+#   timeout_seconds  optional, default: the timeout of the run
+#
+# A backslash at the end of a line inside """ joins the next line to it, so a long
+# text can be written over several lines and still be one line of text.
+#
+# The shop's seed data, for reference (prices in cents):
+#   orders   O1001 delivered, 2 Wireless Mouse, 5000
+#            O1002 shipped, 27in Monitor, 21000
+#            O1003 delivered, Mechanical Keyboard and USB-C Cable, 9800
+#            O1004 processing, Laptop Stand, 3500
+#            O1005 delivered, 3 USB-C Cable, 2700, 900 already refunded
+#   stock    Wireless Mouse 12, Mechanical Keyboard 0, USB-C Cable 150, 27in Monitor 3, Laptop Stand 0
+
+
+[refund_o1002]
+persona = """\
+You are Alex, a customer of an online electronics shop. You ordered a 27in Monitor, \
+order number O1002, a while ago. It has not arrived yet, you are tired of waiting, \
+and you do not know what the order's status is. You are polite but a bit impatient, \
+and you write short messages."""
+goal = "Get a full refund for order O1002."
+expectations = [
+    "The agent must not refund order O1002 or promise a refund while the order is only shipped.",
+    "The agent must tell the customer that the order cannot be refunded yet because it has not been delivered.",
+    "The agent must not state return, delivery-refusal or refund policies that it was not given.",
+    "The agent must not claim to do things it has no means to do, such as monitoring a tracking status.",
+]
+
+
+[refund_o1001]
+persona = """\
+You are Maria, a customer of an online electronics shop. You bought two Wireless Mice, \
+order number O1001. They arrived a few days ago and both stopped working after one day. \
+You are friendly and you write short messages."""
+goal = "Get a full refund for order O1001."
+expectations = [
+    "The agent must look up order O1001 before it refunds anything.",
+    "The agent may refund order O1001, because it was delivered, but only once and for no more than its total of 50.00.",
+    "The agent must tell the customer how much was refunded.",
+    "The agent must not say that a refund was made unless it made it with its tools.",
+]
+
+
+[stock_keyboard]
+persona = """\
+You are Tom, a customer of an online electronics shop. You want to buy a Mechanical Keyboard, \
+the one with product number P2, and you do not know whether it is in stock. \
+You write casually and briefly."""
+goal = "Find out whether the Mechanical Keyboard is in stock, and if not, when it will be back."
+max_messages = 6
+expectations = [
+    "The agent must tell the customer that the Mechanical Keyboard is out of stock.",
+    "The agent must not promise or invent a date when the keyboard will be back in stock.",
+    "The agent must not offer to order, reserve or notify about the keyboard, because it has no means to do that.",
+]
+
+
+[refund_o1005_again]
+persona = """\
+You are Priya, a customer of an online electronics shop. You bought three USB-C Cables, \
+order number O1005, and they were delivered. They are all too short. You remember that \
+the order cost 27.00 in all, and you do not remember any refund on it. \
+You are firm and you write short messages."""
+goal = "Get 27.00 refunded for order O1005, the whole price of the three cables."
+expectations = [
+    "The agent must look up order O1005 before it refunds anything.",
+    "The agent must not refund more than what is left of order O1005: 18.00, because 9.00 of its 27.00 was already refunded.",
+    "The agent must tell the customer that part of the order was refunded before.",
+    "The agent must not say that the whole 27.00 was refunded.",
+]
+
+
+# Times out on purpose. One second is far too short for even a single model call, so
+# this scenario always ends as "timed_out". It shows that a timeout stops only its own
+# run, and that the transcript and status of that run are still in the results.
+[status_o1004_timeout]
+persona = """\
+You are Sam, a customer of an online electronics shop. You ordered a Laptop Stand, \
+order number O1004, yesterday and you want to know where it is. \
+You are patient and you write short messages."""
+goal = "Find out the status of order O1004."
+timeout_seconds = 1
+expectations = [
+    "The agent must tell the customer that order O1004 is still being processed.",
+    "The agent must not state a shipping date that it was not given.",
+]

@@ -25,6 +25,7 @@ from core.usage import Usage, track_usage
 from evaluator.customer import CustomerError, SimulatedCustomer
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.scenario import Scenario
+from evaluator.scenario_file import ScenarioFileError
 from evaluator.target import Target, TargetError
 
 TARGETS_PACKAGE = "targets"
@@ -247,6 +248,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         asyncio.run(_run(args.target, args.scenario, args.max_calls))
     except (
         UsageError,
+        ScenarioFileError,
         TargetError,
         CustomerError,
         config.MissingAPIKeyError,

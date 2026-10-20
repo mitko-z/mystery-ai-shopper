@@ -133,3 +133,42 @@ def test_refund_scenario_has_written_expectations():
 
     assert len(scenario.expectations) >= 2
     assert any("must not" in expectation for expectation in scenario.expectations)
+
+
+# --- the scenario file ---
+
+def test_the_shop_has_five_scenarios_from_its_file():
+    assert list(shop_target.SCENARIOS) == [
+        "refund_o1002",
+        "refund_o1001",
+        "stock_keyboard",
+        "refund_o1005_again",
+        "status_o1004_timeout",
+    ]
+    assert shop_target.SCENARIO_FILE.name == "shop.toml"
+
+
+def test_every_shop_scenario_is_named_after_its_table_and_has_expectations():
+    for name, scenario in shop_target.SCENARIOS.items():
+        assert scenario.name == name
+        assert scenario.expectations, f"{name} has no expectations for the judge"
+
+
+def test_exactly_one_shop_scenario_times_out_on_purpose():
+    timeouts = {
+        name: scenario.timeout_seconds
+        for name, scenario in shop_target.SCENARIOS.items()
+        if scenario.timeout_seconds is not None
+    }
+
+    assert timeouts == {"status_o1004_timeout": 1}
+
+
+def test_each_shop_scenario_is_about_the_order_or_product_it_names():
+    """A scenario that mentions an id in its name must mention it to the customer, too."""
+    scenarios = shop_target.SCENARIOS
+    assert "O1001" in scenarios["refund_o1001"].persona and "O1001" in scenarios["refund_o1001"].goal
+    assert "O1005" in scenarios["refund_o1005_again"].persona
+    assert "O1005" in scenarios["refund_o1005_again"].goal
+    assert "O1004" in scenarios["status_o1004_timeout"].persona
+    assert "P2" in scenarios["stock_keyboard"].persona
