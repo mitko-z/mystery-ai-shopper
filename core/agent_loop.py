@@ -2,12 +2,14 @@ import asyncio
 import functools
 import json
 import logging
+import random
 from dataclasses import dataclass
 from itertools import takewhile
 from typing import Any, Optional
 
 from google import genai
 from google.genai import types
+from google.genai.interactions import Interaction
 
 from core import config
 from core.app_types import Tools, Step, History
@@ -42,6 +44,52 @@ class CallLimitError(Exception):
     """Raised when a run has made all the model calls it may make."""
 
 
+class ModelError(Exception):
+    """Raised when a model call failed with an HTTP error and was not, or could
+    no longer be, retried.
+
+    Attributes:
+        status_code: The HTTP status the model API answered with.
+    """
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# An HTTP status that never occurs. See `_build_client`.
+_NEVER_RETRIED_STATUS = 999
+
+
+def _build_client(api_key: str, **http_options: Any) -> genai.Client:
+    """Create a Gemini client that makes one HTTP request per call.
+
+    Retrying is done by `_call_model`, which can bound it and keep it inside the
+    run's timeout. The SDK's own retrying is switched off, or the two would
+    multiply, and the SDK would sleep for the whole Retry-After header, which
+    can be hours for a daily quota. `attempts` counts retries and cannot be 0,
+    so the SDK is told to retry only on a status that never occurs.
+
+    Args:
+        api_key: The Gemini API key.
+        **http_options: More `types.HttpOptions` fields, e.g. a test's HTTP client.
+
+    Returns:
+        A client whose every request is bounded by a timeout.
+    """
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=60_000,
+            retry_options=types.HttpRetryOptions(
+                attempts=1,
+                http_status_codes=[_NEVER_RETRIED_STATUS],
+            ),
+            **http_options,
+        ),
+    )
+
+
 @functools.cache
 def _get_client() -> genai.Client:
     """Create the Gemini client on first use, so importing this module needs
@@ -53,19 +101,103 @@ def _get_client() -> genai.Client:
     Raises:
         config.MissingAPIKeyError: If the API key is not set.
     """
-    # The SDK retries 429 by sleeping for the whole Retry-After header. With a
-    # daily quota that is hours, so the call looks hung. Leave 429 out of the
-    # retried codes so it raises at once, and bound every request.
-    return genai.Client(
-        api_key=config.get_api_key(),
-        http_options=types.HttpOptions(
-            timeout=60_000,
-            retry_options=types.HttpRetryOptions(
-                attempts=2,
-                http_status_codes=[500, 502, 503, 504],
-            ),
-        ),
-    )
+    return _build_client(config.get_api_key())
+
+
+def _status_code(error: Exception) -> Optional[int]:
+    """The HTTP status of a failed model call, or None if `error` is not one.
+
+    The SDK's HTTP errors come from private modules and in more than one
+    family, so this reads the status from the error instead of importing their
+    classes: `status_code` or, in the older family, `code`.
+    """
+    for name in ("status_code", "code"):
+        value = getattr(error, name, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _retry_after(error: Exception) -> Optional[float]:
+    """The seconds the server asked us to wait, from the Retry-After header, if any."""
+    headers = getattr(getattr(error, "response", None), "headers", None)
+    value = headers.get("retry-after") if headers is not None else None
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None  # a date, or junk: the usual pause is used
+
+
+def _retry_pause(status: int, error: Exception, retry: int) -> Optional[float]:
+    """How long to wait before retry number `retry` (0 for the first), or None to give up.
+
+    The pause doubles with each retry, and is at least the server's Retry-After.
+    A Retry-After over `config.MAX_RETRY_AFTER_SECONDS` is a quota that will not
+    clear soon, so there is no point in waiting for it. A little random time is
+    added, so runs that failed together do not retry together.
+    """
+    if status not in config.RETRYABLE_STATUS_CODES:
+        return None
+    pause = config.RETRY_PAUSE_SECONDS * 2 ** retry
+    retry_after = _retry_after(error)
+    if retry_after is not None:
+        if retry_after > config.MAX_RETRY_AFTER_SECONDS:
+            return None
+        pause = max(pause, retry_after)
+    return pause * (1 + random.uniform(0, config.RETRY_JITTER))
+
+
+async def _pause(seconds: float) -> None:
+    """Wait between two tries. Tests replace it, so they do not wait."""
+    await asyncio.sleep(seconds)
+
+
+async def _call_model(spec: AgentSpec, model_input: list[Step]) -> Interaction:
+    """Call the model once, trying again when it fails with a rate limit or server error.
+
+    The pauses are part of the run, so a timeout around the run covers them.
+    Failed tries are not counted as model calls, as they got no answer; a try
+    that is cancelled in flight is (see `core.usage`).
+
+    Args:
+        spec: The agent's system instruction, tool schemas and model.
+        model_input: The conversation steps to send, the new message included.
+
+    Returns:
+        The model's response.
+
+    Raises:
+        ModelError: If the API answered with an HTTP error that is not retryable,
+            or kept failing through all the retries.
+        config.MissingAPIKeyError: If the API key is not set.
+    """
+    for retry in range(config.MODEL_CALL_RETRIES + 1):
+        try:
+            return await _get_client().aio.interactions.create(
+                model=spec.model,
+                input=model_input,
+                system_instruction=spec.system_instruction,
+                tools=spec.tool_schemas,
+            )
+        except asyncio.CancelledError:
+            # E.g. a timeout hung up on the call. No response will come, so its tokens
+            # are unknown, but it is likely billed. Count it, and let the cancel go on.
+            record_cancelled()
+            raise
+        except Exception as e:
+            status = _status_code(e)
+            if status is None:
+                raise  # not an answer from the API: nothing to retry here
+            pause = _retry_pause(status, e, retry) if retry < config.MODEL_CALL_RETRIES else None
+            if pause is None:
+                raise ModelError(f"The model call failed: {e}", status) from e
+            logger.warning(
+                "The model call failed with status %s. Retry %d of %d in %.1f s.",
+                status, retry + 1, config.MODEL_CALL_RETRIES, pause,
+            )
+            await _pause(pause)
+    raise AssertionError("unreachable: the last try returns or raises")
+
 
 async def run_turn(history: History, user_message: Optional[str], spec: AgentSpec) -> None:
     """Run one conversation turn with the agent and record it in `history`.
@@ -75,7 +207,8 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
     `model_output`. The agent's text reply is the `model_output` step(s) at the
     end, and the tools it wants are the `function_call` steps after the last
     `user_input`. The tools are not executed here. Each call to the Gemini API
-    is recorded in `core.usage`.
+    is recorded in `core.usage`. A call that fails with a rate limit or server
+    error is retried a few times, with growing pauses.
 
     Args:
         history: The conversation so far, as interaction steps. Appended to in
@@ -89,6 +222,8 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
     Raises:
         CallLimitError: If the run being tracked has made as many model calls as
             it may. Nothing is sent to the model then.
+        ModelError: If the model API answered with an HTTP error that cannot be
+            retried, or that kept coming through all the retries.
         config.MissingAPIKeyError: If the API key is not set.
         ValueError: If the interaction response contains no steps.
     """
@@ -99,19 +234,7 @@ async def run_turn(history: History, user_message: Optional[str], spec: AgentSpe
     if user_message is not None:
         new_input.append({"type": "user_input", "content": [{"type": "text", "text": user_message}]})
 
-    try:
-        interaction = await _get_client().aio.interactions.create(
-            model=spec.model,
-            input=[*history, *new_input],
-            system_instruction=spec.system_instruction,
-            tools=spec.tool_schemas,
-        )
-    except asyncio.CancelledError:
-        # E.g. a timeout hung up on the call. No response will come, so its tokens
-        # are unknown, but it is likely billed. Count it, and let the cancel go on.
-        record_cancelled()
-        raise
-
+    interaction = await _call_model(spec, [*history, *new_input])
     record(interaction.usage)
 
     if not interaction.steps:

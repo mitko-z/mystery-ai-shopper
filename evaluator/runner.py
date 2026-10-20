@@ -19,7 +19,6 @@ from types import ModuleType
 from typing import Optional
 
 import httpx
-from google.genai import errors as genai_errors
 
 from core import agent_loop, config
 from core.usage import Usage, track_usage
@@ -244,7 +243,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         CustomerError,
         config.MissingAPIKeyError,
         agent_loop.TurnLimitError,
-        genai_errors.APIError,
+        agent_loop.ModelError,
         httpx.HTTPError,
         agent_loop.CallLimitError,
     ) as e:

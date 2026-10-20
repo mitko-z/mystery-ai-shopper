@@ -5,7 +5,6 @@ from typing import Annotated
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from google.genai import errors as genai_errors
 from pydantic import BaseModel, StringConstraints
 
 from core import agent_loop, config
@@ -79,7 +78,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     except agent_loop.TurnLimitError as e:
         logger.warning("Conversation %r: %s", payload.conversation_id, e)
         raise HTTPException(status_code=502, detail=str(e))
-    except (genai_errors.APIError, httpx.HTTPError):
+    except (agent_loop.ModelError, httpx.HTTPError):
         logger.exception("Conversation %r: the model call failed", payload.conversation_id)
         raise HTTPException(
             status_code=502,
