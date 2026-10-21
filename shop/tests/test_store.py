@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from shop import store
@@ -93,6 +95,34 @@ async def test_seeded_partial_refund_respected(shop):
     # O1005 already has 900 of 2700 refunded
     assert_error(await shop.refund_order("O1005", 2000), store.ERR_REFUND_EXCEEDS_TOTAL)
     assert (await shop.refund_order("O1005"))["refunded_amount"] == 1800
+
+
+# --- concurrent refunds ---
+
+async def test_concurrent_full_refunds_pay_once(shop):
+    """Two simultaneous full refunds of one order: one succeeds, one is rejected."""
+    results = await asyncio.gather(
+        shop.refund_order("O1001"),
+        shop.refund_order("O1001"),
+    )
+
+    succeeded = [r for r in results if r["ok"]]
+    failed = [r for r in results if not r["ok"]]
+    assert len(succeeded) == 1 and succeeded[0]["refunded_amount"] == 5000
+    assert len(failed) == 1
+    assert_error(failed[0], store.ERR_REFUND_EXCEEDS_TOTAL)
+    assert (await shop.get_order("O1001"))["order"]["refunded"] == 5000
+
+
+async def test_concurrent_partial_refunds_respect_the_cap(shop):
+    """Two simultaneous 3000 refunds of a 5000 order: the second would exceed the total."""
+    results = await asyncio.gather(
+        shop.refund_order("O1001", 3000),
+        shop.refund_order("O1001", 3000),
+    )
+
+    assert sorted(r["ok"] for r in results) == [False, True]
+    assert (await shop.get_order("O1001"))["order"]["refunded"] == 3000
 
 
 # --- one shop per conversation ---
