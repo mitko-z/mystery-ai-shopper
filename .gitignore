@@ -222,3 +222,6 @@ __marimo__/
 /.agents/skills/library-skills/SKILL.md
 /.claude/
 /.vscode/
+
+# Results files of the parallel runner
+/results/

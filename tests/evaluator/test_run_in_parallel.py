@@ -8,57 +8,10 @@ import pytest
 
 from core.usage import grand_total
 from evaluator.runner import RunResult, RunStatus, run_in_parallel
-from evaluator.scenario import Scenario
 from evaluator.target import Target, TargetError
-from tests.fakes import (
-    RoutedInteractions,
-    ScriptedInteractions,
-    Turn,
-    call_step,
-    reply_step,
-    reported_usage,
-    use_fake,
-)
+from tests.evaluator.helpers import make_scenarios, use_scripted_customers
 
 pytestmark = pytest.mark.anyio
-
-
-# --- scenarios and a model that has a script for each ---
-# Scenario i is told apart by the marker "<<persona i>>" in its persona. The simulated
-# customer's instruction contains the persona, so the model fake can pick the script
-# of the scenario whose customer is calling.
-
-def marker(i):
-    return f"<<persona {i}>>"
-
-
-def make_scenarios(count, timeouts=None):
-    """Scenarios s0, s1, ...; `timeouts` maps an index to a timeout_seconds."""
-    timeouts = timeouts or {}
-    return [
-        Scenario(
-            name=f"s{i}",
-            persona=f"{marker(i)} You are customer {i}.",
-            goal="Get a refund.",
-            timeout_seconds=timeouts.get(i),
-        )
-        for i in range(count)
-    ]
-
-
-def customer_script(i):
-    """Customer i says "Hi from i", then finishes and says goodbye. Each model call costs 10*(i+1) tokens."""
-    usage = reported_usage(input=10 * (i + 1), total=10 * (i + 1))
-    finish = [call_step("f1", "finish", {"outcome": "gave_up", "reason": "Refused."})]
-    return ScriptedInteractions(
-        Turn([reply_step(f"Hi from {i}")], usage),
-        Turn(finish, usage),
-        Turn([reply_step("Thanks, bye.")], usage),
-    )
-
-
-def use_scripted_customers(monkeypatch, count):
-    use_fake(monkeypatch, RoutedInteractions({marker(i): customer_script(i) for i in range(count)}))
 
 
 # --- targets that can be watched ---

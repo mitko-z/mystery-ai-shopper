@@ -88,8 +88,10 @@ Errors:
 
 ## Run a scenario with the simulated customer
 
+The runner has two modes. `single` plays one scenario and shows the conversation live. `parallel` plays many at once and writes a results file (see [Run many scenarios at once](#run-many-scenarios-at-once)).
+
 ```
-uv run python -m evaluator.runner shop refund_o1002
+uv run python -m evaluator.runner single shop refund_o1002
 ```
 
 A second AI agent plays a customer with a persona and a secret goal (here: Alex, who wants a refund for order `O1002`). It chats with the support agent of the fake shop, decides when it is done or gives up, and the whole conversation is printed as it happens, followed by the outcome: `goal_achieved`, `gave_up`, or `cut_off` when the message limit is reached. The last line reports what the run cost: the number of model calls and, as far as the API reports them, the tokens (input, output, thought and total). It is printed even when the run fails. A run may make at most 60 model calls (cancelled ones included), as a brake against a conversation that loops. Change the limit with `--max-calls N`. When it is reached, the run stops with an error and the conversation so far is still shown. A model call that fails with a rate limit (429) or a server error (5xx) is tried again up to 3 times, after pauses of about 2, 4 and 8 seconds. If the server asks for a longer wait than 30 seconds, as a daily quota does, the run fails at once instead of waiting. Other errors, such as a wrong key, are not retried. A call that is cancelled (for example by a timeout) never gets a response, so its tokens are unknown: it is counted as `Calls cancelled`, and the token totals are then lower than what was really used. It needs `GEMINI_API_KEY` (see [Setup](#setup)) and makes real model calls. No server has to run: the shop is called in the same process through its HTTP API, and a run always starts from a fresh shop.
@@ -101,7 +103,7 @@ To test another system, add a module `targets/<name>.py` with:
 - `open_target()`: an async context manager that yields an object with `async send(message) -> reply` (see `evaluator/target.py`). `HttpChatTarget` already covers any system with a `POST /chat` endpoint taking `conversation_id` and `message` and answering `{"reply": ...}`.
 - `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit, timeout and written expectations). The easy way to get one is to write the scenarios in a TOML file and load it with `load_scenarios` (see [Scenario files](#scenario-files)).
 
-Then run `uv run python -m evaluator.runner <name> <scenario>`. The system under test needs no changes.
+Then run `uv run python -m evaluator.runner single <name> <scenario>` for one scenario, or `uv run python -m evaluator.runner parallel <name>` for all of them. The system under test needs no changes.
 
 ### Scenario files
 
@@ -121,6 +123,34 @@ expectations = [           # optional
 `targets/shop.py` loads the file with `load_scenarios` (`evaluator/scenario_file.py`). A mistake in the file, such as a missing key, a misspelled key or a value of the wrong type, stops the run with a message that names the file and the scenario. The comments at the top of `scenarios/shop.toml` explain the keys and list the shop's seed data, which helps when writing new scenarios.
 
 The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One second is too short for a single model call, so it always ends as timed out.
+
+### Run many scenarios at once
+
+```
+uv run python -m evaluator.runner parallel shop
+```
+
+All scenarios of the target run at the same time, each in a conversation and a shop of its own. A line is printed as each one finishes, then a summary: how many runs finished, timed out or failed, what all of it cost, and where the results are. The options:
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `--scenarios FILE` | read the scenarios from this TOML file instead of the target's own | the target's scenarios |
+| `--max-parallel N` | the most runs active at the same time. The others wait for a free slot, and the wait does not count against their timeout. | 5 |
+| `--timeout SECONDS` | how long one conversation may take, unless its scenario has a `timeout_seconds` | 120 |
+| `--max-calls N` | the most model calls one run may make | 60 |
+| `--results FILE` | where to write the results | `results/<target>-<time>.json` |
+
+A run ends in one of three ways, and the status is not the same as the customer's outcome:
+
+- `finished`: the conversation ended, and has an outcome (`goal_achieved`, `gave_up` or `cut_off`).
+- `timed_out`: the conversation took longer than its timeout.
+- `failed`: something went wrong, e.g. the target could not answer, the model kept failing, or the run reached its call limit.
+
+A run that times out or fails never stops the others, and it keeps what was said before it ended. They are results like any other, so the command still ends with exit code 0. It ends with 1 only if it could not run at all, e.g. for an unknown target, a wrong scenario file, or a missing API key. The key is checked once before anything starts, so a missing key is one error and not one for every run.
+
+The results file is JSON. It holds the settings, the status counts and the total cost, and one entry per scenario, in the order of the scenarios (not the order they finished). Each entry has the status, the error if there was one, the outcome, the whole transcript, the cost of that run alone, the timing and, to help a judge, the persona, goal and expectations of the scenario. A target that keeps a log of its agent's tool calls (the fake shop does) also gets `tool_calls` in the entry. For a target that keeps none, the key is left out, because an empty list would mean "no tools were called". The `results/` folder is not kept in git.
+
+The scenario `status_o1004_timeout` of the shop times out on purpose, so a normal run of `parallel shop` shows one `timed_out` run next to the finished ones.
 
 ### Expectations and the tool-call log
 

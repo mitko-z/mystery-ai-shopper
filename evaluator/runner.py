@@ -1,6 +1,11 @@
-"""Run a scenario against a target and print the conversation.
+"""Run scenarios against a target with a simulated customer.
 
-    uv run python -m evaluator.runner <target> <scenario>
+    uv run python -m evaluator.runner single <target> <scenario>
+    uv run python -m evaluator.runner parallel <target>
+
+`single` runs one scenario and prints the conversation as it happens. `parallel`
+runs many scenarios at once, prints a line for each as it finishes, and writes
+all the results to a JSON file.
 
 `<target>` is a module in the `targets` package, e.g. `shop`. It provides
 `open_target()`, an async context manager that yields a `Target`, and
@@ -9,15 +14,19 @@
 
 import argparse
 import asyncio
+import contextlib
 import importlib
+import json
 import logging
+import os
 import pkgutil
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
@@ -25,16 +34,19 @@ import httpx
 
 from core import agent_loop, config
 from core.tool_recorder import ToolCall
-from core.usage import Usage, track_usage
+from core.usage import Usage, grand_total, track_usage
 from evaluator.customer import CustomerError, SimulatedCustomer
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.scenario import Scenario
-from evaluator.scenario_file import ScenarioFileError
+from evaluator.scenario_file import ScenarioFileError, load_scenarios
 from evaluator.target import Target, TargetError, ToolCallSource
 
 logger = logging.getLogger(__name__)
 
 TARGETS_PACKAGE = "targets"
+DEFAULT_MAX_PARALLEL = 5
+DEFAULT_TIMEOUT_SECONDS = 120.0
+RESULTS_FOLDER = Path("results")
 
 class Speaker(StrEnum):
     """Who said a message. The value is how the speaker is named in the printed conversation."""
@@ -391,6 +403,106 @@ def format_usage(usage: Usage) -> str:
     return line
 
 
+def format_run_line(result: RunResult, number: int, total: int) -> str:
+    """The line that reports one run of a batch as it finishes.
+
+    Example: `[2/5] refund_o1002: finished (gave_up) in 41.3 s, 10 model calls`.
+    A call that was cancelled in flight, e.g. by the timeout, is named too: it is
+    not among the model calls, which got an answer. A run that did not finish also
+    gives the reason.
+    """
+    status = result.status.value
+    if result.outcome is not None:
+        status += f" ({result.outcome.kind.value})"
+    line = (
+        f"[{number}/{total}] {result.scenario.name}: {status} "
+        f"in {result.duration_seconds:.1f} s, {result.usage.calls} model calls"
+    )
+    if result.usage.calls_cancelled:
+        line += f", {result.usage.calls_cancelled} cancelled"
+    if result.error is not None:
+        line += f" - {result.error}"
+    return line
+
+
+def _count_statuses(results: Sequence[RunResult]) -> dict[str, int]:
+    """How many runs ended with each status. Every status is there, also with 0."""
+    counts = {status.value: 0 for status in RunStatus}
+    for result in results:
+        counts[result.status.value] += 1
+    return counts
+
+
+def format_summary(results: Sequence[RunResult], totals: Usage, results_path: Path) -> str:
+    """The lines that close a batch: runs by status, what it all cost, and where the results are."""
+    statuses = " | ".join(f"{status}: {count}" for status, count in _count_statuses(results).items())
+    return "\n".join([
+        f"Runs: {len(results)} | {statuses}",
+        format_usage(totals),
+        f"Results written to {results_path}",
+    ])
+
+
+def build_report(
+    target_name: str,
+    results: Sequence[RunResult],
+    *,
+    settings: dict[str, Any],
+    started_at: datetime,
+    duration_seconds: float,
+    totals: Usage,
+) -> dict[str, Any]:
+    """The content of the results file, as a plain dict ready for JSON.
+
+    Args:
+        target_name: The target the scenarios were played on.
+        results: The result of each run, in scenario order.
+        settings: The limits the batch ran with.
+        started_at: When the batch began, in UTC.
+        duration_seconds: How long the whole batch took.
+        totals: What the whole batch cost.
+    """
+    return {
+        "target": target_name,
+        "started_at": started_at.isoformat(),
+        "duration_seconds": round(duration_seconds, 3),
+        "settings": settings,
+        "statuses": _count_statuses(results),
+        "totals": totals.to_dict(),
+        "runs": [result.to_dict() for result in results],
+    }
+
+
+class ResultsFileError(Exception):
+    """Raised when the results file cannot be written."""
+
+
+def default_results_path(target_name: str, started_at: datetime) -> Path:
+    """Where the results of a batch go unless told otherwise, e.g. `results/shop-20261021-101500.json`."""
+    return RESULTS_FOLDER / f"{target_name}-{started_at:%Y%m%d-%H%M%S}.json"
+
+
+def write_report(path: Path, report: dict[str, Any]) -> None:
+    """Write the report as readable UTF-8 JSON, making the folder if it is missing.
+
+    The file is written under another name first and then moved into place, so
+    an interrupted write never leaves half a file where the results should be.
+
+    Raises:
+        ResultsFileError: If the file cannot be written.
+    """
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)
+        raise ResultsFileError(f"Cannot write the results file {path}: {e.strerror or e}") from e
+
+
 class UsageError(Exception):
     """Raised when the command line names a target or scenario that does not exist."""
 
@@ -424,8 +536,8 @@ def get_scenario(target_module: ModuleType, name: str) -> Scenario:
     return scenarios[name]
 
 
-async def _run(target_name: str, scenario_name: str, max_calls: int) -> None:
-    """Run one scenario and print the conversation as it happens.
+async def _single_command(target_name: str, scenario_name: str, max_calls: int) -> None:
+    """The `single` command: run one scenario and print the conversation as it happens.
 
     The outcome, if the run reached one, and what the run cost are printed at the
     end, also when the run fails.
@@ -445,33 +557,170 @@ async def _run(target_name: str, scenario_name: str, max_calls: int) -> None:
             print(format_usage(usage))
 
 
+async def _parallel_command(
+    target_name: str,
+    scenarios_file: Optional[str],
+    *,
+    max_parallel: int,
+    timeout: float,
+    max_calls: int,
+    results_path: Optional[str],
+) -> None:
+    """The `parallel` command: run many scenarios at once, write the results file and print a summary.
+
+    A line is printed for each run as it finishes. The scenarios are those of
+    `scenarios_file`, or else those of the target. A run that times out or fails
+    is a result like any other, so it does not stop the batch or change the exit code.
+
+    Raises:
+        UsageError: If the target is unknown or has no scenarios.
+        ScenarioFileError: If the scenario file is wrong.
+        config.MissingAPIKeyError: If the API key is not set. This is checked before
+            any run starts, so a missing key is one error and not one per run.
+        ResultsFileError: If the results file cannot be written.
+    """
+    target_module = load_target(target_name)
+    source = load_scenarios(scenarios_file) if scenarios_file else target_module.SCENARIOS
+    scenarios = list(source.values())
+    if not scenarios:
+        raise UsageError(f"There are no scenarios to run on target {target_name!r}.")
+    agent_loop.check_api_key()
+
+    started_at = datetime.now(timezone.utc)
+    started = time.perf_counter()
+    path = Path(results_path) if results_path else default_results_path(target_name, started_at)
+    count = f"{len(scenarios)} scenario" + ("" if len(scenarios) == 1 else "s")
+    print(f"Running {count} on {target_name}, at most {max_parallel} at a time.", flush=True)
+
+    finished = 0
+
+    def report_progress(result: RunResult) -> None:
+        nonlocal finished
+        finished += 1
+        print(format_run_line(result, finished, len(scenarios)), flush=True)
+
+    results = await run_in_parallel(
+        target_module,
+        scenarios,
+        max_parallel=max_parallel,
+        default_timeout=timeout,
+        max_calls=max_calls,
+        on_finish=report_progress,
+    )
+
+    totals = grand_total()
+    report = build_report(
+        target_name,
+        results,
+        settings={"max_parallel": max_parallel, "timeout_seconds": timeout, "max_calls": max_calls},
+        started_at=started_at,
+        duration_seconds=time.perf_counter() - started,
+        totals=totals,
+    )
+    write_report(path, report)
+    print()
+    print(format_summary(results, totals, path))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line: a mode (`single` or `parallel`), then what that mode needs."""
+    parser = argparse.ArgumentParser(
+        prog="python -m evaluator.runner",
+        description="Run scenarios with a simulated customer against a target.",
+    )
+    modes = parser.add_subparsers(dest="mode", required=True, metavar="{single,parallel}")
+
+    def add_shared_arguments(mode: argparse.ArgumentParser) -> None:
+        mode.add_argument("target", help=f"name of a module in the `{TARGETS_PACKAGE}` package, e.g. shop")
+        mode.add_argument(
+            "--max-calls",
+            type=int,
+            default=config.DEFAULT_CALLS_PER_RUN,
+            help=f"most model calls one run may make (default: {config.DEFAULT_CALLS_PER_RUN})",
+        )
+
+    single = modes.add_parser(
+        "single",
+        help="run one scenario and print the conversation as it happens",
+        description="Run one scenario and print the conversation as it happens.",
+    )
+    add_shared_arguments(single)
+    single.add_argument("scenario", help="name of one of the target's scenarios, e.g. refund_o1002")
+
+    parallel = modes.add_parser(
+        "parallel",
+        help="run many scenarios at once and write the results to a JSON file",
+        description="Run many scenarios at once. A line is printed as each one finishes, "
+                    "and all the results are written to a JSON file.",
+    )
+    add_shared_arguments(parallel)
+    parallel.add_argument(
+        "--scenarios",
+        metavar="FILE",
+        help="TOML file with the scenarios to run (default: all scenarios of the target)",
+    )
+    parallel.add_argument(
+        "--max-parallel",
+        type=int,
+        default=DEFAULT_MAX_PARALLEL,
+        help=f"most runs active at the same time (default: {DEFAULT_MAX_PARALLEL})",
+    )
+    parallel.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="seconds one conversation may take, unless its scenario says otherwise "
+             f"(default: {DEFAULT_TIMEOUT_SECONDS:g})",
+    )
+    parallel.add_argument(
+        "--results",
+        metavar="FILE",
+        help=f"where to write the results (default: {RESULTS_FOLDER}/<target>-<time>.json)",
+    )
+    return parser
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Command line entry point.
 
     Returns:
-        0 if the run finished (whatever the outcome), 1 if it could not be run.
+        0 if the run, or the batch, completed (whatever the outcomes or statuses of
+        the runs), 1 if it could not be run, 130 if it was interrupted.
     """
-    parser = argparse.ArgumentParser(
-        prog="python -m evaluator.runner",
-        description="Run a scenario with a simulated customer against a target.",
-    )
-    parser.add_argument("target", help=f"name of a module in the `{TARGETS_PACKAGE}` package, e.g. shop")
-    parser.add_argument("scenario", help="name of one of the target's scenarios, e.g. refund_o1002")
-    parser.add_argument("--max-calls", help="most model calls one run may make (default: 60)", type=int, default=config.DEFAULT_CALLS_PER_RUN)
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.max_calls < 1:
         parser.error("--max-calls must be at least 1")
+    if args.mode == "parallel":
+        if args.max_parallel < 1:
+            parser.error("--max-parallel must be at least 1")
+        if args.timeout <= 0:
+            parser.error("--timeout must be greater than 0")
 
     # Model text can hold characters the Windows console codepage cannot print.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     try:
-        asyncio.run(_run(args.target, args.scenario, args.max_calls))
+        if args.mode == "single":
+            asyncio.run(_single_command(args.target, args.scenario, args.max_calls))
+        else:
+            asyncio.run(_parallel_command(
+                args.target,
+                args.scenarios,
+                max_parallel=args.max_parallel,
+                timeout=args.timeout,
+                max_calls=args.max_calls,
+                results_path=args.results,
+            ))
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return 130
     except (
         UsageError,
         ScenarioFileError,
+        ResultsFileError,
         TargetError,
         CustomerError,
         config.MissingAPIKeyError,

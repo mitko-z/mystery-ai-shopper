@@ -214,7 +214,7 @@ def test_main_prints_the_conversation(monkeypatch, capsys):
     use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
     fake_target_module(monkeypatch, StubTarget("Hello"))
 
-    code = runner.main(["fake", "refund"])
+    code = runner.main(["single", "fake", "refund"])
 
     out = capsys.readouterr().out
     assert code == 0
@@ -229,7 +229,7 @@ def test_main_prints_the_conversation(monkeypatch, capsys):
 
 def test_main_names_the_available_targets_when_given_an_unknown_one(capsys):
     """A typo in the target name lists what exists, and exits with 1."""
-    code = runner.main(["nosuch", "refund"])
+    code = runner.main(["single", "nosuch", "refund"])
 
     err = capsys.readouterr().err
     assert code == 1
@@ -241,7 +241,7 @@ def test_main_names_the_available_scenarios_when_given_an_unknown_one(monkeypatc
     """A typo in the scenario name lists what the target has."""
     fake_target_module(monkeypatch, StubTarget())
 
-    code = runner.main(["fake", "nosuch"])
+    code = runner.main(["single", "fake", "nosuch"])
 
     err = capsys.readouterr().err
     assert code == 1
@@ -254,7 +254,7 @@ def test_main_reports_a_target_failure_in_one_line(monkeypatch, capsys):
     use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")]))
     fake_target_module(monkeypatch, FailingTarget())
 
-    code = runner.main(["fake", "refund"])
+    code = runner.main(["single", "fake", "refund"])
 
     captured = capsys.readouterr()
     assert code == 1
@@ -307,7 +307,7 @@ def test_main_prints_what_the_run_cost_counting_the_customer_and_the_target(monk
     ))
     fake_target_module(monkeypatch, ModelBackedTarget())
 
-    code = runner.main(["fake", "refund"])
+    code = runner.main(["single", "fake", "refund"])
 
     lines = capsys.readouterr().out.splitlines()
     assert code == 0
@@ -322,7 +322,7 @@ def test_main_still_prints_what_the_run_cost_when_it_fails(monkeypatch, capsys):
     ))
     fake_target_module(monkeypatch, FailingTarget())
 
-    code = runner.main(["fake", "refund"])
+    code = runner.main(["single", "fake", "refund"])
 
     captured = capsys.readouterr()
     assert code == 1
@@ -335,7 +335,7 @@ def test_main_still_prints_what_the_run_cost_when_it_fails(monkeypatch, capsys):
 
 def test_main_prints_no_cost_for_a_run_that_never_started(capsys):
     """A mistyped target name is a usage error, not a run."""
-    runner.main(["nosuch", "refund"])
+    runner.main(["single", "nosuch", "refund"])
 
     assert "Model calls" not in capsys.readouterr().out
 
@@ -353,7 +353,7 @@ def test_main_stops_a_run_that_reaches_the_call_limit(monkeypatch, capsys):
     use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
     fake_target_module(monkeypatch, StubTarget("Hello"))
 
-    code = runner.main(["fake", "refund", "--max-calls", "2"])
+    code = runner.main(["single", "fake", "refund", "--max-calls", "2"])
 
     captured = capsys.readouterr()
     assert code == 1
@@ -367,7 +367,7 @@ def test_main_stops_a_run_that_reaches_the_call_limit(monkeypatch, capsys):
 @pytest.mark.parametrize("value", ["0", "-3"])
 def test_main_rejects_a_call_limit_below_one(value, capsys):
     with pytest.raises(SystemExit) as exit_info:
-        runner.main(["fake", "refund", "--max-calls", value])
+        runner.main(["single", "fake", "refund", "--max-calls", value])
 
     assert exit_info.value.code == 2
     assert "--max-calls must be at least 1" in capsys.readouterr().err
@@ -383,9 +383,9 @@ def test_main_gives_the_run_its_call_limit(extra_args, expected, monkeypatch):
     async def fake_run(target_name, scenario_name, max_calls):
         seen["max_calls"] = max_calls
 
-    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_single_command", fake_run)
 
-    runner.main(["fake", "refund", *extra_args])
+    runner.main(["single", "fake", "refund", *extra_args])
 
     assert seen == {"max_calls": expected}
 
@@ -397,7 +397,7 @@ def test_main_reports_a_failing_model_in_one_line(monkeypatch, capsys):
     use_fake(monkeypatch, ScriptedInteractions(*[FakeHttpError(503) for _ in range(4)]))
     fake_target_module(monkeypatch, StubTarget("Hello"))
 
-    code = runner.main(["fake", "refund"])
+    code = runner.main(["single", "fake", "refund"])
 
     captured = capsys.readouterr()
     assert code == 1
@@ -428,7 +428,7 @@ def test_main_reports_a_wrong_scenario_file_in_one_line(monkeypatch, capsys):
 
     monkeypatch.setattr(runner, "load_target", broken_target)
 
-    code = runner.main(["fake", "refund"])
+    code = runner.main(["single", "fake", "refund"])
 
     captured = capsys.readouterr()
     assert code == 1

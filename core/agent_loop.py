@@ -104,6 +104,18 @@ def _get_client() -> genai.Client:
     return _build_client(config.get_api_key())
 
 
+def check_api_key() -> None:
+    """Fail now if the API key is missing, and not at the first model call.
+
+    A batch can use it to stop before it starts, instead of failing every run
+    separately for the same reason.
+
+    Raises:
+        config.MissingAPIKeyError: If the API key is not set.
+    """
+    _get_client()
+
+
 def _status_code(error: Exception) -> Optional[int]:
     """The HTTP status of a failed model call, or None if `error` is not one.
 

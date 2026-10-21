@@ -484,3 +484,29 @@ async def test_without_a_tracked_run_there_is_no_limit(agent, monkeypatch):
         await agent.run_turn([], "hi", SPEC)
 
     assert len(fake.calls) == calls
+
+
+# --- checking the key before the first call ---
+
+async def test_check_api_key_fails_at_once_without_a_key(agent):
+    """The batch uses it to stop before any run starts."""
+    with pytest.raises(config.MissingAPIKeyError):
+        agent.check_api_key()
+
+
+async def test_check_api_key_passes_with_a_key(agent, monkeypatch):
+    monkeypatch.setenv(config.API_KEY_ENV_VAR, "test-key")
+    try:
+        agent.check_api_key()
+    finally:
+        agent._get_client.cache_clear()  # do not leave a real client for the other tests
+
+
+async def test_check_api_key_asks_for_the_client_the_model_calls_use(agent, monkeypatch):
+    """So a test that replaces the client with a fake needs no key."""
+    asked = []
+    monkeypatch.setattr(agent, "_get_client", lambda: asked.append("client"))
+
+    agent.check_api_key()
+
+    assert asked == ["client"]
