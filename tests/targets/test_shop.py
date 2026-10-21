@@ -1,4 +1,6 @@
+import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,7 +8,7 @@ from core import agent_loop, config
 from evaluator.target import TargetError, ToolCallSource
 from shop import app as shop_app
 from targets import shop as shop_target
-from tests.fakes import ScriptedInteractions, call_step, reply_step, use_fake, user_step
+from tests.fakes import FakeStep, ScriptedInteractions, call_step, reply_step, use_fake, user_step
 
 pytestmark = pytest.mark.anyio
 
@@ -172,3 +174,42 @@ def test_each_shop_scenario_is_about_the_order_or_product_it_names():
     assert "O1005" in scenarios["refund_o1005_again"].goal
     assert "O1004" in scenarios["status_o1004_timeout"].persona
     assert "P2" in scenarios["stock_keyboard"].persona
+
+
+# --- runs side by side ---
+
+class RefundingModel:
+    """Stands in for the model of the support agent: it refunds O1001, then reports it.
+
+    Every conversation waits at the barrier before it refunds, so all of them are in
+    flight together before the first refund is made.
+    """
+
+    def __init__(self, conversations):
+        self._barrier = asyncio.Barrier(conversations)
+
+    async def create(self, **kwargs):
+        if kwargs["input"][-1]["type"] == "user_input":
+            await self._barrier.wait()
+            step = call_step("c1", "refund_order", {"order_id": "O1001"})
+        else:
+            step = reply_step("Refund done.")
+        return SimpleNamespace(steps=[FakeStep(**step)], usage=None)
+
+
+async def test_runs_side_by_side_do_not_share_a_shop(monkeypatch):
+    """Two runs refund the same order at the same time. Each shop must have it refunded once, and neither run may see the other's refund."""
+    use_fake(monkeypatch, RefundingModel(conversations=2))
+
+    async with shop_target.open_target() as first, shop_target.open_target() as second:
+        async with asyncio.timeout(10):
+            await asyncio.gather(first.send("Refund O1001, please."), second.send("Refund O1001, please."))
+
+        for target in (first, second):
+            [call] = target.tool_calls()
+            assert call.name == "refund_order"
+            assert call.result["ok"] is True  # in a shared shop the second refund would be refused
+            shop = shop_app._conversations[target.conversation_id].shop
+            order = (await shop.get_order("O1001"))["order"]
+            assert order["refunded"] == 5000
+            assert order["refundable"] == 0

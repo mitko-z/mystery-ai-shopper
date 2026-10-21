@@ -294,6 +294,66 @@ async def run_in_isolation(
     )
 
 
+async def run_in_parallel(
+        target_module: ModuleType,
+        scenarios: list[Scenario],
+        *,
+        max_parallel: int,
+        default_timeout: float,
+        max_calls: int,
+        on_finish: Optional[Callable[[RunResult], None]] = None) -> list[RunResult]:
+    """Play all `scenarios`, several at a time, and report how each one went.
+
+    Every scenario runs in isolation (see `run_in_isolation`), so a run that fails
+    or times out only ends itself: that is its result, with that status, and the
+    other runs go on. Because failures are results, they are not raised.
+
+    At most `max_parallel` runs are active at once. The others wait for a free
+    slot, and the wait does not count against their timeout. A model call that
+    is being retried after a pause keeps its slot on purpose: while the API is
+    rate-limiting us, that stops more runs from adding to the load.
+
+    Args:
+        target_module: A module of the `targets` package, with `open_target()`.
+            Each run opens its own target from it.
+        scenarios: The scenarios to play.
+        max_parallel: The most runs active at the same time. At least 1.
+        default_timeout: Seconds a conversation may take, unless its scenario
+            names a timeout of its own.
+        max_calls: The most model calls one run may make.
+        on_finish: Called with the result of each run as soon as that run is
+            over, in the order the runs finish. A callback that raises is logged
+            and ignored, so reporting can never lose a result.
+
+    Returns:
+        One result per scenario, in the order of `scenarios` and not in the
+        order the runs finished.
+
+    Raises:
+        ValueError: If `max_parallel` is less than 1.
+    """
+    if max_parallel < 1:
+        raise ValueError(f"Max parallel runs must be >= 1, got {max_parallel}")
+
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def worker(scenario: Scenario) -> RunResult:
+        async with semaphore:
+            run_result = await run_in_isolation(
+                target_module,
+                scenario,
+                default_timeout=default_timeout,
+                max_calls=max_calls)
+        if on_finish is not None:
+            try:
+                on_finish(run_result)
+            except Exception:
+                logger.exception("The on_finish callback failed for scenario %r. Its result is kept.", scenario.name)
+        return run_result
+
+    return await asyncio.gather(*(worker(scenario) for scenario in scenarios))
+
+
 def format_header(scenario: Scenario) -> str:
     """The lines that open a printed run: who the customer is and what they want."""
     return (

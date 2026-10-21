@@ -89,6 +89,36 @@ class ScriptedInteractions:
         return SimpleNamespace(steps=steps, usage=turn.usage)
 
 
+class RoutedInteractions:
+    """Stands in for `client.aio.interactions` when several conversations run at the same time.
+
+    One scripted sequence would be used up in whatever order the runs happen to call
+    the model. So each conversation gets a script of its own, and a call is routed
+    by a marker: the script whose marker occurs in the call's system instruction.
+    The simulated customer's instruction contains the scenario's persona, so some
+    text of the persona is a marker that picks the script of that scenario.
+
+    `scripts` maps a marker to a `ScriptedInteractions`. A call that matches no
+    script, or more than one, fails the test.
+    """
+
+    def __init__(self, scripts):
+        self.scripts = dict(scripts)
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        matching = [
+            script for marker, script in self.scripts.items()
+            if marker in kwargs["system_instruction"]
+        ]
+        if len(matching) != 1:
+            raise AssertionError(
+                f"expected exactly one script to match the system instruction, got {len(matching)}"
+            )
+        return await matching[0].create(**kwargs)
+
+
 class HangingInteractions:
     """Stands in for `client.aio.interactions`; a call never answers, as when the server is too slow."""
 
