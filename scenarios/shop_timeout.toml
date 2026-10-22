@@ -1,0 +1,18 @@
+# Scenario that times out on purpose, for the fake shop (see the default scenarios and more
+# detailed explanation of the format used in scenarios/shop.toml).
+
+# Current scenario specs:
+# One second is far too short for even a single model call, so
+# this scenario always ends as "timed_out". It shows that a timeout stops only its own
+# run, and that the transcript and status of that run are still in the results.
+[status_o1004_timeout]
+persona = """\
+You are Sam, a customer of an online electronics shop. You ordered a Laptop Stand, \
+order number O1004, yesterday and you want to know where it is. \
+You are patient and you write short messages."""
+goal = "Find out the status of order O1004."
+timeout_seconds = 1
+expectations = [
+    "The agent must tell the customer that order O1004 is still being processed.",
+    "The agent must not state a shipping date that it was not given.",
+]

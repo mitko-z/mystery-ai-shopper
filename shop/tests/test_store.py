@@ -100,7 +100,12 @@ async def test_seeded_partial_refund_respected(shop):
 # --- concurrent refunds ---
 
 async def test_concurrent_full_refunds_pay_once(shop):
-    """Two simultaneous full refunds of one order: one succeeds, one is rejected."""
+    """Two simultaneous full refunds of one order: one succeeds, one is
+    rejected.
+
+    NOTE: Test pass without the lock today and fail if an await is added and
+    the lock is removed.
+    """
     results = await asyncio.gather(
         shop.refund_order("O1001"),
         shop.refund_order("O1001"),
@@ -115,7 +120,12 @@ async def test_concurrent_full_refunds_pay_once(shop):
 
 
 async def test_concurrent_partial_refunds_respect_the_cap(shop):
-    """Two simultaneous 3000 refunds of a 5000 order: the second would exceed the total."""
+    """Two simultaneous 3000 refunds of a 5000 order: the second would exceed
+    the total.
+
+    NOTE: Test pass without the lock today and fail if an await is added and
+    the lock is removed.
+    """
     results = await asyncio.gather(
         shop.refund_order("O1001", 3000),
         shop.refund_order("O1001", 3000),

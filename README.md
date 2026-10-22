@@ -122,9 +122,11 @@ expectations = [           # optional
 
 `targets/shop.py` loads the file with `load_scenarios` (`evaluator/scenario_file.py`). A mistake in the file, such as a missing key, a misspelled key or a value of the wrong type, stops the run with a message that names the file and the scenario. The comments at the top of `scenarios/shop.toml` explain the keys and list the shop's seed data, which helps when writing new scenarios.
 
-The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One second is too short for a single model call, so it always ends as timed out.
+The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One second is too short for a single model call, so it always ends as timed out. It is kept in a file of its own, `scenarios/shop_timeout.toml`, so that a normal batch does not hold a run that is sure to time out. Run it with `--scenarios scenarios/shop_timeout.toml`.
 
 ### Run many scenarios at once
+
+**Warning:** this makes many real model calls (about 6 to 8 per scenario) and uses your API quota.
 
 ```
 uv run python -m evaluator.runner parallel shop
@@ -150,7 +152,7 @@ A run that times out or fails never stops the others, and it keeps what was said
 
 The results file is JSON. It holds the settings, the status counts and the total cost, and one entry per scenario, in the order of the scenarios (not the order they finished). Each entry has the status, the error if there was one, the outcome, the whole transcript, the cost of that run alone, the timing and, to help a judge, the persona, goal and expectations of the scenario. A target that keeps a log of its agent's tool calls (the fake shop does) also gets `tool_calls` in the entry. For a target that keeps none, the key is left out, because an empty list would mean "no tools were called". The `results/` folder is not kept in git.
 
-The scenario `status_o1004_timeout` of the shop times out on purpose, so a normal run of `parallel shop` shows one `timed_out` run next to the finished ones.
+To see a `timed_out` run, play the scenario that times out on purpose: `uv run python -m evaluator.runner parallel shop --scenarios scenarios/shop_timeout.toml`.
 
 ### Expectations and the tool-call log
 

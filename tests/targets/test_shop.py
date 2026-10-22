@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from core import agent_loop, config
+from evaluator.scenario_file import load_scenarios
 from evaluator.target import TargetError, ToolCallSource
 from shop import app as shop_app
 from targets import shop as shop_target
@@ -139,13 +140,12 @@ def test_refund_scenario_has_written_expectations():
 
 # --- the scenario file ---
 
-def test_the_shop_has_five_scenarios_from_its_file():
+def test_the_shop_has_four_scenarios_from_its_file():
     assert list(shop_target.SCENARIOS) == [
         "refund_o1002",
         "refund_o1001",
         "stock_keyboard",
         "refund_o1005_again",
-        "status_o1004_timeout",
     ]
     assert shop_target.SCENARIO_FILE.name == "shop.toml"
 
@@ -156,14 +156,21 @@ def test_every_shop_scenario_is_named_after_its_table_and_has_expectations():
         assert scenario.expectations, f"{name} has no expectations for the judge"
 
 
-def test_exactly_one_shop_scenario_times_out_on_purpose():
-    timeouts = {
-        name: scenario.timeout_seconds
-        for name, scenario in shop_target.SCENARIOS.items()
-        if scenario.timeout_seconds is not None
-    }
+def test_no_default_shop_scenario_times_out_on_purpose():
+    """A normal batch must not hold a run that is sure to time out and to cost a cancelled call."""
+    assert [name for name, scenario in shop_target.SCENARIOS.items() if scenario.timeout_seconds is not None] == []
 
-    assert timeouts == {"status_o1004_timeout": 1}
+
+def test_the_timeout_scenario_is_in_a_file_of_its_own():
+    """It is run on purpose with `--scenarios`, to show that a timeout stops only its own run."""
+    path = shop_target.SCENARIO_FILE.with_name("shop_timeout.toml")
+
+    scenarios = load_scenarios(path)
+
+    assert list(scenarios) == ["status_o1004_timeout"]
+    assert scenarios["status_o1004_timeout"].timeout_seconds == 1
+    assert "O1004" in scenarios["status_o1004_timeout"].persona
+    assert scenarios["status_o1004_timeout"].expectations
 
 
 def test_each_shop_scenario_is_about_the_order_or_product_it_names():
@@ -172,7 +179,6 @@ def test_each_shop_scenario_is_about_the_order_or_product_it_names():
     assert "O1001" in scenarios["refund_o1001"].persona and "O1001" in scenarios["refund_o1001"].goal
     assert "O1005" in scenarios["refund_o1005_again"].persona
     assert "O1005" in scenarios["refund_o1005_again"].goal
-    assert "O1004" in scenarios["status_o1004_timeout"].persona
     assert "P2" in scenarios["stock_keyboard"].persona
 
 
