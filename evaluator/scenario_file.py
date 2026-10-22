@@ -16,6 +16,7 @@ typo such as `expectation` is found at once and not silently ignored.
 """
 
 import tomllib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,35 @@ def load_scenarios(path: str | Path) -> dict[str, Scenario]:
     if not data:
         raise ScenarioFileError(f"The scenario file {path} holds no scenarios.")
     return {name: _build_scenario(path, name, table) for name, table in data.items()}
+
+
+def load_scenario_files(paths: Iterable[str | Path]) -> dict[str, Scenario]:
+    """Read the scenarios of several TOML files into one dict.
+
+    Args:
+        paths: The files to read, in order.
+
+    Returns:
+        The scenarios by name: those of the first file, then those of the next, and
+        so on.
+
+    Raises:
+        ScenarioFileError: If a file is wrong (see `load_scenarios`), or if two files
+            have a scenario of the same name. Silently keeping one of them would run
+            a scenario other than the one that was asked for.
+    """
+    scenarios: dict[str, Scenario] = {}
+    source: dict[str, Path] = {}
+    for path in map(Path, paths):
+        for name, scenario in load_scenarios(path).items():
+            if name in scenarios:
+                raise ScenarioFileError(
+                    f"The scenario {name!r} is in both {source[name]} and {path}. "
+                    "Scenario names must be different."
+                )
+            scenarios[name] = scenario
+            source[name] = path
+    return scenarios
 
 
 def _build_scenario(path: Path, name: str, table: Any) -> Scenario:

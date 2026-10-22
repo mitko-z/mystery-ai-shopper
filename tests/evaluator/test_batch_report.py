@@ -28,7 +28,7 @@ STARTED = datetime.datetime(2026, 10, 21, 10, 15, 30, tzinfo=datetime.timezone.u
 
 
 def make_result(name="refund", status=RunStatus.FINISHED, outcome=None, calls=3, seconds=41.26,
-                error=None, error_type=None, tool_calls=None, messages=(), cancelled=0):
+                error=None, error_type=None, tool_calls=None, messages=(), cancelled=0, timeout=120.0):
     """A run result with placeholder values; the arguments replace single fields."""
     if status is RunStatus.FINISHED and outcome is None:
         outcome = Outcome(OutcomeKind.GAVE_UP, "Refused.")
@@ -40,6 +40,7 @@ def make_result(name="refund", status=RunStatus.FINISHED, outcome=None, calls=3,
         usage=Usage(calls=calls, input_tokens=100, total_tokens=100, calls_cancelled=cancelled),
         started_at=STARTED,
         duration_seconds=seconds,
+        timeout_seconds=timeout,
         error=error,
         error_type=error_type,
         tool_calls=tool_calls,
@@ -115,7 +116,7 @@ def test_the_report_holds_the_target_the_settings_the_totals_and_every_run_in_or
     report = build_report(
         "shop",
         results,
-        settings={"max_parallel": 5, "timeout_seconds": 120.0, "max_calls": 60},
+        settings={"max_parallel": 5, "default_timeout_seconds": 120.0, "max_calls": 60},
         started_at=STARTED,
         duration_seconds=61.23456,
         totals=Usage(calls=6, input_tokens=200),
@@ -124,7 +125,7 @@ def test_the_report_holds_the_target_the_settings_the_totals_and_every_run_in_or
     assert report["target"] == "shop"
     assert report["started_at"] == "2026-10-21T10:15:30+00:00"
     assert report["duration_seconds"] == 61.235
-    assert report["settings"] == {"max_parallel": 5, "timeout_seconds": 120.0, "max_calls": 60}
+    assert report["settings"] == {"max_parallel": 5, "default_timeout_seconds": 120.0, "max_calls": 60}
     assert report["statuses"] == {"finished": 1, "timed_out": 0, "failed": 1}
     assert report["totals"]["calls"] == 6 and report["totals"]["input_tokens"] == 200
     assert [run["scenario"] for run in report["runs"]] == ["first", "second"]
@@ -178,3 +179,12 @@ def test_a_file_that_cannot_be_written_is_reported_with_its_path(tmp_path):
         write_report(path, {})
 
     assert str(path) in str(raised.value)
+
+
+def test_every_run_in_the_report_has_the_timeout_it_had():
+    """The settings only hold the default. A scenario can have a timeout of its own, and the run shows which."""
+    results = [make_result("usual"), make_result("quick", timeout=1.0)]
+
+    report = build_report("shop", results, settings={}, started_at=STARTED, duration_seconds=1, totals=Usage())
+
+    assert [run["timeout_seconds"] for run in report["runs"]] == [120.0, 1.0]

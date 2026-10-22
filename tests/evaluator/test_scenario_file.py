@@ -1,7 +1,7 @@
 import pytest
 
 from evaluator.scenario import Scenario
-from evaluator.scenario_file import ScenarioFileError, load_scenarios
+from evaluator.scenario_file import ScenarioFileError, load_scenario_files, load_scenarios
 
 
 @pytest.fixture
@@ -192,3 +192,44 @@ def test_the_message_names_the_file(write):
         load_scenarios(path)
 
     assert str(path) in str(raised.value)
+
+
+# --- several files at once ---
+
+OTHER = """
+[stock]
+persona = "You are Tom."
+goal = "Ask about stock."
+"""
+
+
+def test_scenarios_of_several_files_come_together_in_the_order_of_the_files(write):
+    first = write(MINIMAL, "first.toml")
+    second = write(OTHER, "second.toml")
+
+    assert list(load_scenario_files([second, first])) == ["stock", "refund"]
+    assert list(load_scenario_files([first, second])) == ["refund", "stock"]
+
+
+def test_no_files_give_no_scenarios():
+    assert load_scenario_files([]) == {}
+
+
+def test_a_scenario_name_in_two_files_is_refused_naming_both(write):
+    first = write(MINIMAL, "first.toml")
+    second = write(MINIMAL, "second.toml")
+
+    with pytest.raises(ScenarioFileError, match="'refund' is in both") as raised:
+        load_scenario_files([first, second])
+
+    assert str(first) in str(raised.value) and str(second) in str(raised.value)
+
+
+def test_a_wrong_file_among_several_is_refused_naming_it(write):
+    good = write(MINIMAL, "good.toml")
+    bad = write("this is = = not toml", "bad.toml")
+
+    with pytest.raises(ScenarioFileError, match="not valid TOML") as raised:
+        load_scenario_files([good, bad])
+
+    assert str(bad) in str(raised.value)

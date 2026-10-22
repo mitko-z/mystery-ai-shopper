@@ -14,7 +14,7 @@ from core.usage import Usage
 from evaluator import runner
 from evaluator.target import Target, TargetError
 from tests.evaluator.helpers import make_scenarios, use_scripted_customers
-from tests.fakes import ScriptedInteractions, use_fake
+from tests.fakes import FakeHttpError, ScriptedInteractions, use_fake
 
 
 @pytest.fixture(autouse=True)
@@ -98,17 +98,18 @@ def test_the_results_file_holds_every_run_in_scenario_order(monkeypatch, tmp_pat
 
     report = json.loads(results.read_text(encoding="utf-8"))
     assert report["target"] == "fake"
-    assert report["settings"] == {"max_parallel": 2, "timeout_seconds": 30.0, "max_calls": 40}
+    assert report["settings"] == {"max_parallel": 2, "default_timeout_seconds": 30.0, "max_calls": 40}
     assert report["statuses"] == {"finished": 3, "timed_out": 0, "failed": 0}
     assert report["totals"]["calls"] == 9
     assert [run["scenario"] for run in report["runs"]] == ["s0", "s1", "s2"]
     assert [run["transcript"][0]["text"] for run in report["runs"]] == ["Hi from 0", "Hi from 1", "Hi from 2"]
     assert [run["usage"]["input_tokens"] for run in report["runs"]] == [30, 60, 90]
+    assert [run["timeout_seconds"] for run in report["runs"]] == [30.0, 30.0, 30.0]
     assert report["runs"][0]["expectations"] == []
     assert "tool_calls" not in report["runs"][0]  # this target keeps no log
 
 
-def test_a_run_that_fails_and_one_that_times_out_are_results_and_not_errors(monkeypatch, capsys, tmp_path):
+def test_a_run_that_fails_and_one_that_times_out_are_results_and_the_others_go_on(monkeypatch, capsys, tmp_path):
     use_scripted_customers(monkeypatch, 5)
 
     async def act(message):
@@ -124,11 +125,13 @@ def test_a_run_that_fails_and_one_that_times_out_are_results_and_not_errors(monk
 
     out = capsys.readouterr().out
     report = json.loads(results.read_text(encoding="utf-8"))
-    assert code == 0
+    assert code == runner.EXIT_RUNS_DID_NOT_FINISH
     assert [run["status"] for run in report["runs"]] == ["finished", "failed", "finished", "timed_out", "finished"]
     assert report["runs"][1]["error"] == "boom"
     assert report["runs"][3]["outcome"] is None
     assert [m["text"] for m in report["runs"][3]["transcript"]] == ["Hi from 3"]
+    # the timeout this run had is its own, not the default of the batch
+    assert [run["timeout_seconds"] for run in report["runs"]] == [120.0, 120.0, 120.0, 0.05, 120.0]
     assert "Runs: 5 | finished: 3 | timed_out: 1 | failed: 1" in out
     assert "s1: failed" in out and "- boom" in out
     assert "s3: timed_out" in out
@@ -141,7 +144,7 @@ def test_the_call_limit_reaches_the_runs(monkeypatch, tmp_path):
     code, results = run_parallel(tmp_path, "--max-calls", "2")
 
     report = json.loads(results.read_text(encoding="utf-8"))
-    assert code == 0
+    assert code == runner.EXIT_RUNS_DID_NOT_FINISH
     assert [run["status"] for run in report["runs"]] == ["failed", "failed"]
     assert {run["error_type"] for run in report["runs"]} == {"CallLimitError"}
 
@@ -313,3 +316,125 @@ def test_each_mode_accepts_only_its_own_arguments(argv, message, capsys):
 
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
+
+
+# --- the exit code ---
+
+def test_the_exit_codes_are_different_for_each_kind_of_ending():
+    """A script can tell a batch that could not start from one that ran but did not all finish."""
+    codes = {0, runner.EXIT_COULD_NOT_RUN, runner.EXIT_RUNS_DID_NOT_FINISH, runner.EXIT_INTERRUPTED}
+
+    assert len(codes) == 4
+    assert runner.EXIT_COULD_NOT_RUN == 1
+    assert runner.EXIT_RUNS_DID_NOT_FINISH == 3  # 2 is argparse's, for a command line it cannot use
+
+
+def test_a_batch_in_which_every_run_finished_exits_with_0_whatever_the_customers_verdict(monkeypatch, tmp_path):
+    """`gave_up` and `cut_off` are what the customer decided, for the judge to weigh. They are not a failure of the batch."""
+    use_scripted_customers(monkeypatch, 2)
+    register_target(monkeypatch, make_scenarios(2))
+
+    code, results = run_parallel(tmp_path)
+
+    report = json.loads(results.read_text(encoding="utf-8"))
+    assert {run["outcome"]["kind"] for run in report["runs"]} == {"gave_up"}
+    assert code == 0
+
+
+def test_a_batch_with_a_run_that_timed_out_exits_with_3_and_still_writes_the_file(monkeypatch, capsys, tmp_path):
+    use_scripted_customers(monkeypatch, 2)
+
+    async def act(message):
+        if message == "Hi from 1":
+            await asyncio.Event().wait()  # never answers
+        return "Hello"
+
+    register_target(monkeypatch, make_scenarios(2, timeouts={1: 0.05}), act=act)
+
+    code, results = run_parallel(tmp_path)
+
+    assert code == 3
+    assert json.loads(results.read_text(encoding="utf-8"))["statuses"] == {"finished": 1, "timed_out": 1, "failed": 0}
+    assert "Runs: 2 | finished: 1 | timed_out: 1 | failed: 0" in capsys.readouterr().out
+
+
+def test_a_key_that_is_refused_by_the_server_fails_every_run_and_exits_with_3(monkeypatch, tmp_path):
+    """The key is only checked to be set. A wrong one shows as failed runs, and the exit code must say so."""
+    use_fake(monkeypatch, ScriptedInteractions(*[FakeHttpError(401) for _ in range(3)]))
+    register_target(monkeypatch, make_scenarios(3))
+
+    code, results = run_parallel(tmp_path)
+
+    report = json.loads(results.read_text(encoding="utf-8"))
+    assert report["statuses"] == {"finished": 0, "timed_out": 0, "failed": 3}
+    assert {run["error_type"] for run in report["runs"]} == {"ModelError"}
+    assert code == 3
+
+
+def test_a_batch_that_could_not_run_exits_with_1(capsys, tmp_path):
+    code, _ = run_parallel(tmp_path, target="nosuch")
+
+    assert code == 1
+
+
+def test_a_single_run_still_exits_with_0_when_it_ends(monkeypatch):
+    """`single` is one conversation for a person to read. There is no batch to judge by its exit code."""
+    use_scripted_customers(monkeypatch, 1)
+    register_target(monkeypatch, make_scenarios(1))
+
+    assert runner.main(["single", "fake", "s0"]) == 0
+
+
+# --- several scenario files ---
+
+def write_scenarios(path, *indexes):
+    """A scenario file with the scenarios s<i> that `use_scripted_customers` has scripts for."""
+    path.write_text(
+        "".join(
+            f'[s{i}]\npersona = "<<persona {i}>> You are customer {i}."\ngoal = "Get a refund."\n\n'
+            for i in indexes
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_scenarios_of_several_files_are_played_together_in_the_order_of_the_files(monkeypatch, tmp_path):
+    use_scripted_customers(monkeypatch, 3)
+    register_target(monkeypatch, scenarios=[])
+    first = write_scenarios(tmp_path / "first.toml", 2)
+    second = write_scenarios(tmp_path / "second.toml", 0, 1)
+
+    code, results = run_parallel(tmp_path, "--scenarios", first, second)
+
+    report = json.loads(results.read_text(encoding="utf-8"))
+    assert code == 0
+    assert [run["scenario"] for run in report["runs"]] == ["s2", "s0", "s1"]
+
+
+def test_the_scenarios_option_can_be_repeated(monkeypatch, tmp_path):
+    use_scripted_customers(monkeypatch, 2)
+    register_target(monkeypatch, scenarios=[])
+    first = write_scenarios(tmp_path / "first.toml", 0)
+    second = write_scenarios(tmp_path / "second.toml", 1)
+
+    code, results = run_parallel(tmp_path, "--scenarios", first, "--scenarios", second)
+
+    report = json.loads(results.read_text(encoding="utf-8"))
+    assert code == 0
+    assert [run["scenario"] for run in report["runs"]] == ["s0", "s1"]
+
+
+def test_files_that_have_a_scenario_of_the_same_name_are_refused_before_anything_runs(monkeypatch, capsys, tmp_path):
+    use_fake(monkeypatch, ScriptedInteractions())
+    module = register_target(monkeypatch, scenarios=[])
+    first = write_scenarios(tmp_path / "first.toml", 0)
+    second = write_scenarios(tmp_path / "second.toml", 0)
+
+    code, results = run_parallel(tmp_path, "--scenarios", first, second)
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "'s0' is in both" in err and "first.toml" in err and "second.toml" in err
+    assert module.opened == 0
+    assert not results.exists()

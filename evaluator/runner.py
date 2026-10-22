@@ -38,7 +38,7 @@ from core.usage import Usage, grand_total, track_usage
 from evaluator.customer import CustomerError, SimulatedCustomer
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.scenario import Scenario
-from evaluator.scenario_file import ScenarioFileError, load_scenarios
+from evaluator.scenario_file import ScenarioFileError, load_scenario_files
 from evaluator.target import Target, TargetError, ToolCallSource
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,11 @@ TARGETS_PACKAGE = "targets"
 DEFAULT_MAX_PARALLEL = 5
 DEFAULT_TIMEOUT_SECONDS = 120.0
 RESULTS_FOLDER = Path("results")
+
+# Exit codes. 2 is taken by argparse, for a command line it cannot use.
+EXIT_COULD_NOT_RUN = 1
+EXIT_RUNS_DID_NOT_FINISH = 3
+EXIT_INTERRUPTED = 130
 
 class Speaker(StrEnum):
     """Who said a message. The value is how the speaker is named in the printed conversation."""
@@ -106,6 +111,9 @@ class RunResult:
         usage: The model calls and tokens of this run alone.
         started_at: When the run began, in UTC.
         duration_seconds: How long the run took.
+        timeout_seconds: The timeout the run had: the scenario's own, or else the
+            default of the batch. It says why a run that ended after 1 second was
+            not given the default one.
         error: Why the run did not finish. None for a finished run.
         error_type: The class name of the error, e.g. `TargetError`.
         tool_calls: The tool calls the target's agent made, for a target that keeps
@@ -119,6 +127,7 @@ class RunResult:
     usage: Usage
     started_at: datetime
     duration_seconds: float
+    timeout_seconds: float
     error: Optional[str] = None
     error_type: Optional[str] = None
     tool_calls: Optional[list[ToolCall]] = None
@@ -146,6 +155,7 @@ class RunResult:
             "outcome": self.outcome.to_dict() if self.outcome is not None else None,
             "started_at": self.started_at.isoformat(),
             "duration_seconds": round(self.duration_seconds, 3),
+            "timeout_seconds": self.timeout_seconds,
             "usage": self.usage.to_dict(),
             "transcript": [message.to_dict() for message in self.transcript.messages],
         }
@@ -300,6 +310,7 @@ async def run_in_isolation(
         usage=usage,
         started_at=started_at,
         duration_seconds=time.perf_counter() - started,
+        timeout_seconds=timeout,
         error=error,
         error_type=error_type,
         tool_calls=tool_calls,
@@ -559,18 +570,22 @@ async def _single_command(target_name: str, scenario_name: str, max_calls: int) 
 
 async def _parallel_command(
     target_name: str,
-    scenarios_file: Optional[str],
+    scenario_files: Optional[list[str]],
     *,
     max_parallel: int,
     timeout: float,
     max_calls: int,
     results_path: Optional[str],
-) -> None:
+) -> list[RunResult]:
     """The `parallel` command: run many scenarios at once, write the results file and print a summary.
 
     A line is printed for each run as it finishes. The scenarios are those of
-    `scenarios_file`, or else those of the target. A run that times out or fails
-    is a result like any other, so it does not stop the batch or change the exit code.
+    `scenario_files`, or else those of the target. A run that times out or fails
+    is a result like any other: it does not stop the batch, and the file is
+    written all the same.
+
+    Returns:
+        The result of each run, in scenario order. `main` turns them into the exit code.
 
     Raises:
         UsageError: If the target is unknown or has no scenarios.
@@ -580,7 +595,7 @@ async def _parallel_command(
         ResultsFileError: If the results file cannot be written.
     """
     target_module = load_target(target_name)
-    source = load_scenarios(scenarios_file) if scenarios_file else target_module.SCENARIOS
+    source = load_scenario_files(scenario_files) if scenario_files else target_module.SCENARIOS
     scenarios = list(source.values())
     if not scenarios:
         raise UsageError(f"There are no scenarios to run on target {target_name!r}.")
@@ -612,7 +627,11 @@ async def _parallel_command(
     report = build_report(
         target_name,
         results,
-        settings={"max_parallel": max_parallel, "timeout_seconds": timeout, "max_calls": max_calls},
+        settings={
+            "max_parallel": max_parallel,
+            "default_timeout_seconds": timeout,
+            "max_calls": max_calls,
+        },
         started_at=started_at,
         duration_seconds=time.perf_counter() - started,
         totals=totals,
@@ -620,6 +639,7 @@ async def _parallel_command(
     write_report(path, report)
     print()
     print(format_summary(results, totals, path))
+    return results
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -657,7 +677,10 @@ def build_parser() -> argparse.ArgumentParser:
     parallel.add_argument(
         "--scenarios",
         metavar="FILE",
-        help="TOML file with the scenarios to run (default: all scenarios of the target)",
+        nargs="+",
+        action="extend",
+        help="TOML file(s) with the scenarios to run, instead of the target's own. "
+             "Give the target first, or the target is taken for a file.",
     )
     parallel.add_argument(
         "--max-parallel",
@@ -684,8 +707,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     """Command line entry point.
 
     Returns:
-        0 if the run, or the batch, completed (whatever the outcomes or statuses of
-        the runs), 1 if it could not be run, 130 if it was interrupted.
+        0 if the run finished, or every run of the batch did (whatever the customer's
+        outcome). 1 if it could not be run at all. 3 if a batch ran, and its file was
+        written, but a run failed or timed out. 130 if it was interrupted.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -705,8 +729,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         if args.mode == "single":
             asyncio.run(_single_command(args.target, args.scenario, args.max_calls))
+            return 0
         else:
-            asyncio.run(_parallel_command(
+            results = asyncio.run(_parallel_command(
                 args.target,
                 args.scenarios,
                 max_parallel=args.max_parallel,
@@ -714,9 +739,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 max_calls=args.max_calls,
                 results_path=args.results,
             ))
+            if any(result.status is not RunStatus.FINISHED for result in results):
+                return EXIT_RUNS_DID_NOT_FINISH
+            return 0
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
-        return 130
+        return EXIT_INTERRUPTED
     except (
         UsageError,
         ScenarioFileError,
@@ -730,8 +758,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         agent_loop.CallLimitError,
     ) as e:
         print(f"error: {e}", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_COULD_NOT_RUN
 
 
 if __name__ == "__main__":

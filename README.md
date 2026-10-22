@@ -136,7 +136,7 @@ All scenarios of the target run at the same time, each in a conversation and a s
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--scenarios FILE` | read the scenarios from this TOML file instead of the target's own | the target's scenarios |
+| `--scenarios FILE...` | read the scenarios from these TOML files instead of the target's own. Give the target first. A scenario name must not be in two files. | the target's scenarios |
 | `--max-parallel N` | the most runs active at the same time. The others wait for a free slot, and the wait does not count against their timeout. | 5 |
 | `--timeout SECONDS` | how long one conversation may take, unless its scenario has a `timeout_seconds` | 120 |
 | `--max-calls N` | the most model calls one run may make | 60 |
@@ -148,11 +148,19 @@ A run ends in one of three ways, and the status is not the same as the customer'
 - `timed_out`: the conversation took longer than its timeout.
 - `failed`: something went wrong, e.g. the target could not answer, the model kept failing, or the run reached its call limit.
 
-A run that times out or fails never stops the others, and it keeps what was said before it ended. They are results like any other, so the command still ends with exit code 0. It ends with 1 only if it could not run at all, e.g. for an unknown target, a wrong scenario file, or a missing API key. The key is checked once before anything starts, so a missing key is one error and not one for every run.
+A run that times out or fails never stops the others, and it keeps what was said before it ended. The results file is written all the same, because those runs are part of the result. The key is checked once before anything starts, so a missing key is one error and not one for every run. The command tells how it went by its exit code:
 
-The results file is JSON. It holds the settings, the status counts and the total cost, and one entry per scenario, in the order of the scenarios (not the order they finished). Each entry has the status, the error if there was one, the outcome, the whole transcript, the cost of that run alone, the timing and, to help a judge, the persona, goal and expectations of the scenario. A target that keeps a log of its agent's tool calls (the fake shop does) also gets `tool_calls` in the entry. For a target that keeps none, the key is left out, because an empty list would mean "no tools were called". The `results/` folder is not kept in git.
+| Exit code | Meaning |
+| --- | --- |
+| 0 | every run finished. What the customer decided (`goal_achieved`, `gave_up`, `cut_off`) is for the judge to weigh, so it does not change the code. |
+| 1 | it could not run at all, e.g. an unknown target, a wrong scenario file, a missing API key, or a results file that cannot be written |
+| 2 | the command line is wrong (argparse) |
+| 3 | it ran and wrote the file, but at least one run failed or timed out. This is also what a wrong API key looks like, because the key is only checked to be set: every run fails. |
+| 130 | interrupted with Ctrl+C |
 
-To see a `timed_out` run, play the scenario that times out on purpose: `uv run python -m evaluator.runner parallel shop --scenarios scenarios/shop_timeout.toml`.
+The results file is JSON. It holds the settings, the status counts and the total cost, and one entry per scenario, in the order of the scenarios (not the order they finished). Each entry has the status, the error if there was one, the outcome, the whole transcript, the cost of that run alone, the timing, the timeout the run had (a scenario can have one of its own, so it is not always the default in `settings`) and, to help a judge, the persona, goal and expectations of the scenario. A target that keeps a log of its agent's tool calls (the fake shop does) also gets `tool_calls` in the entry. For a target that keeps none, the key is left out, because an empty list would mean "no tools were called". The `results/` folder is not kept in git.
+
+To see a `timed_out` run, play the scenario that times out on purpose together with the others: `uv run python -m evaluator.runner parallel shop --scenarios scenarios/shop.toml scenarios/shop_timeout.toml`. It ends with exit code 3.
 
 ### Expectations and the tool-call log
 

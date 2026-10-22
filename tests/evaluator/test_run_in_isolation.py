@@ -162,6 +162,7 @@ async def test_a_finished_run_reports_how_the_conversation_went(monkeypatch):
     assert result.scenario.name == "refund"
     assert result.started_at.tzinfo == datetime.timezone.utc
     assert result.duration_seconds >= 0
+    assert result.timeout_seconds == DEFAULT_TIMEOUT
 
 
 async def test_each_run_opens_its_own_target_and_closes_it(monkeypatch):
@@ -218,6 +219,7 @@ async def test_the_runs_default_timeout_applies_when_the_scenario_has_none(monke
     result = await run(module_opening(SlowTarget()), default_timeout=0.05)
 
     assert result.status is RunStatus.TIMED_OUT
+    assert result.timeout_seconds == 0.05
     assert "timeout of 0.05 seconds" in result.error
 
 
@@ -227,6 +229,7 @@ async def test_the_scenarios_own_timeout_wins_over_the_default(monkeypatch):
     result = await run(module_opening(SlowTarget()), make_scenario(timeout_seconds=0.05), default_timeout=60)
 
     assert result.status is RunStatus.TIMED_OUT
+    assert result.timeout_seconds == 0.05  # not the default of 60
     assert result.duration_seconds < 5
 
 
@@ -400,6 +403,7 @@ async def test_a_finished_result_as_a_dict(monkeypatch):
     assert as_dict["goal"] == "Get a refund."
     assert as_dict["expectations"] == ["must not refund a shipped order"]
     assert as_dict["status"] == "finished"
+    assert as_dict["timeout_seconds"] == DEFAULT_TIMEOUT
     assert as_dict["error"] is None and as_dict["error_type"] is None
     assert as_dict["outcome"] == {"kind": "gave_up", "reason": "Refused."}
     assert as_dict["usage"]["calls"] == 3
@@ -443,7 +447,8 @@ async def test_the_outcome_of_a_run_that_did_not_finish_is_none_even_if_one_was_
     transcript = Transcript(outcome=Outcome(OutcomeKind.GOAL_ACHIEVED, "Got it."))
     result = RunResult(
         scenario=make_scenario(), status=RunStatus.FAILED, transcript=transcript,
-        usage=Usage(), started_at=STARTED, duration_seconds=1.0, error="closing failed",
+        usage=Usage(), started_at=STARTED, duration_seconds=1.0, timeout_seconds=30.0,
+        error="closing failed",
     )
 
     assert result.outcome is None
