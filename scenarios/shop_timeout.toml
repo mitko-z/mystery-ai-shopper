@@ -1,10 +1,16 @@
-# Scenario that times out on purpose, for the fake shop (see the default scenarios and more
-# detailed explanation of the format used in scenarios/shop.toml).
+# The scenario that times out on purpose, for the fake shop (targets/shop.py).
+#
+# It is kept apart from the default scenarios in shop.toml, so that a normal batch does
+# not hold a run that is sure to time out. The format of this file is explained at the
+# top of shop.toml.
+#
+# One second is too short for even a single model call, so this scenario always ends as
+# "timed_out". It shows that a timeout stops only its own run, and that the transcript
+# and the status of that run are still in the results.
+#
+# To run it together with the default scenarios:
+#   uv run python -m evaluator.runner parallel shop --scenario-file scenarios/shop.toml --scenario-file scenarios/shop_timeout.toml
 
-# Current scenario specs:
-# One second is far too short for even a single model call, so
-# this scenario always ends as "timed_out". It shows that a timeout stops only its own
-# run, and that the transcript and status of that run are still in the results.
 [status_o1004_timeout]
 persona = """\
 You are Sam, a customer of an online electronics shop. You ordered a Laptop Stand, \
