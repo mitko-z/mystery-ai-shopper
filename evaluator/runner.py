@@ -644,9 +644,12 @@ async def _parallel_command(
 
 def build_parser() -> argparse.ArgumentParser:
     """The command line: a mode (`single` or `parallel`), then what that mode needs."""
+    # allow_abbrev=False: a mistyped option is an error, and not a silent guess at
+    # another one (e.g. `--max` for `--max-calls`). It has to be set on every parser.
     parser = argparse.ArgumentParser(
         prog="python -m evaluator.runner",
         description="Run scenarios with a simulated customer against a target.",
+        allow_abbrev=False,
     )
     modes = parser.add_subparsers(dest="mode", required=True, metavar="{single,parallel}")
 
@@ -663,6 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
         "single",
         help="run one scenario and print the conversation as it happens",
         description="Run one scenario and print the conversation as it happens.",
+        allow_abbrev=False,
     )
     add_shared_arguments(single)
     single.add_argument("scenario", help="name of one of the target's scenarios, e.g. refund_o1002")
@@ -672,15 +676,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="run many scenarios at once and write the results to a JSON file",
         description="Run many scenarios at once. A line is printed as each one finishes, "
                     "and all the results are written to a JSON file.",
+        allow_abbrev=False,
     )
     add_shared_arguments(parallel)
     parallel.add_argument(
-        "--scenarios",
+        "--scenario-file",
         metavar="FILE",
-        nargs="+",
-        action="extend",
-        help="TOML file(s) with the scenarios to run, instead of the target's own. "
-             "Give the target first, or the target is taken for a file.",
+        action="append",
+        help="TOML file with the scenarios to run, instead of the target's own. "
+             "Repeat the option to use several files.",
     )
     parallel.add_argument(
         "--max-parallel",
@@ -733,7 +737,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             results = asyncio.run(_parallel_command(
                 args.target,
-                args.scenarios,
+                args.scenario_file,
                 max_parallel=args.max_parallel,
                 timeout=args.timeout,
                 max_calls=args.max_calls,

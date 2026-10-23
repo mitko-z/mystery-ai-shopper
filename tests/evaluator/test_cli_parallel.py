@@ -161,7 +161,7 @@ def test_scenarios_can_come_from_a_file_instead_of_the_target(monkeypatch, tmp_p
         encoding="utf-8",
     )
 
-    code, results = run_parallel(tmp_path, "--scenarios", str(scenario_file))
+    code, results = run_parallel(tmp_path, "--scenario-file", str(scenario_file))
 
     report = json.loads(results.read_text(encoding="utf-8"))
     assert code == 0
@@ -245,7 +245,7 @@ def test_a_wrong_scenario_file_is_one_line(monkeypatch, capsys, tmp_path):
     broken = tmp_path / "broken.toml"
     broken.write_text("this is = = not toml", encoding="utf-8")
 
-    code, results = run_parallel(tmp_path, "--scenarios", str(broken))
+    code, results = run_parallel(tmp_path, "--scenario-file", str(broken))
 
     assert code == 1
     assert "not valid TOML" in capsys.readouterr().err
@@ -405,24 +405,41 @@ def test_scenarios_of_several_files_are_played_together_in_the_order_of_the_file
     first = write_scenarios(tmp_path / "first.toml", 2)
     second = write_scenarios(tmp_path / "second.toml", 0, 1)
 
-    code, results = run_parallel(tmp_path, "--scenarios", first, second)
+    code, results = run_parallel(tmp_path, "--scenario-file", first, "--scenario-file", second)
 
     report = json.loads(results.read_text(encoding="utf-8"))
     assert code == 0
     assert [run["scenario"] for run in report["runs"]] == ["s2", "s0", "s1"]
 
 
-def test_the_scenarios_option_can_be_repeated(monkeypatch, tmp_path):
+def test_the_target_can_come_after_the_scenario_file_option(monkeypatch, tmp_path):
+    """The option takes one file, so it does not swallow the target that follows it."""
     use_scripted_customers(monkeypatch, 2)
     register_target(monkeypatch, scenarios=[])
     first = write_scenarios(tmp_path / "first.toml", 0)
     second = write_scenarios(tmp_path / "second.toml", 1)
+    results = tmp_path / "out.json"
 
-    code, results = run_parallel(tmp_path, "--scenarios", first, "--scenarios", second)
+    code = runner.main([
+        "parallel", "--results", str(results), "--scenario-file", first, "--scenario-file", second, "fake",
+    ])
 
     report = json.loads(results.read_text(encoding="utf-8"))
     assert code == 0
+    assert report["target"] == "fake"
     assert [run["scenario"] for run in report["runs"]] == ["s0", "s1"]
+
+
+def test_a_second_file_needs_the_option_again(tmp_path, capsys):
+    """`--scenario-file a b` is not a list of two files. The `b` is left over, and the command line is refused."""
+    first = write_scenarios(tmp_path / "first.toml", 0)
+    second = write_scenarios(tmp_path / "second.toml", 1)
+
+    with pytest.raises(SystemExit) as exit_info:
+        runner.main(["parallel", "fake", "--scenario-file", first, second])
+
+    assert exit_info.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_files_that_have_a_scenario_of_the_same_name_are_refused_before_anything_runs(monkeypatch, capsys, tmp_path):
@@ -431,10 +448,31 @@ def test_files_that_have_a_scenario_of_the_same_name_are_refused_before_anything
     first = write_scenarios(tmp_path / "first.toml", 0)
     second = write_scenarios(tmp_path / "second.toml", 0)
 
-    code, results = run_parallel(tmp_path, "--scenarios", first, second)
+    code, results = run_parallel(tmp_path, "--scenario-file", first, "--scenario-file", second)
 
     err = capsys.readouterr().err
     assert code == 1
     assert "'s0' is in both" in err and "first.toml" in err and "second.toml" in err
     assert module.opened == 0
     assert not results.exists()
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--scenario", "--scenarios", "--scenario-f", "--max", "--max-par", "--time", "--result"],
+)
+def test_an_option_name_is_not_guessed_from_its_beginning(option, capsys):
+    """`--scenario` could be taken for `--scenario-file`, and `--max` for either of two limits."""
+    with pytest.raises(SystemExit) as exit_info:
+        runner.main(["parallel", "fake", option, "1"])
+
+    assert exit_info.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_the_single_mode_does_not_guess_option_names_either(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        runner.main(["single", "fake", "refund", "--max", "5"])
+
+    assert exit_info.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err

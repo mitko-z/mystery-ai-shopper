@@ -162,7 +162,7 @@ def test_no_default_shop_scenario_times_out_on_purpose():
 
 
 def test_the_timeout_scenario_is_in_a_file_of_its_own():
-    """It is run on purpose with `--scenarios`, to show that a timeout stops only its own run."""
+    """It is run on purpose with `--scenario-file`, to show that a timeout stops only its own run."""
     path = shop_target.SCENARIO_FILE.with_name("shop_timeout.toml")
 
     scenarios = load_scenarios(path)

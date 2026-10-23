@@ -122,7 +122,7 @@ expectations = [           # optional
 
 `targets/shop.py` loads the file with `load_scenarios` (`evaluator/scenario_file.py`). A mistake in the file, such as a missing key, a misspelled key or a value of the wrong type, stops the run with a message that names the file and the scenario. The comments at the top of `scenarios/shop.toml` explain the keys and list the shop's seed data, which helps when writing new scenarios.
 
-The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One second is too short for a single model call, so it always ends as timed out. It is kept in a file of its own, `scenarios/shop_timeout.toml`, so that a normal batch does not hold a run that is sure to time out. Run it with `--scenarios scenarios/shop_timeout.toml`.
+The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One second is too short for a single model call, so it always ends as timed out. It is kept in a file of its own, `scenarios/shop_timeout.toml`, so that a normal batch does not hold a run that is sure to time out. Run it with `--scenario-file scenarios/shop_timeout.toml`.
 
 ### Run many scenarios at once
 
@@ -136,7 +136,7 @@ All scenarios of the target run at the same time, each in a conversation and a s
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--scenarios FILE...` | read the scenarios from these TOML files instead of the target's own. Give the target first. A scenario name must not be in two files. | the target's scenarios |
+| `--scenario-file FILE` | read the scenarios from this TOML file instead of the target's own. Repeat the option to use several files, e.g. `--scenario-file a.toml --scenario-file b.toml`. A scenario name must not be in two files. | the target's scenarios |
 | `--max-parallel N` | the most runs active at the same time. The others wait for a free slot, and the wait does not count against their timeout. | 5 |
 | `--timeout SECONDS` | how long one conversation may take, unless its scenario has a `timeout_seconds` | 120 |
 | `--max-calls N` | the most model calls one run may make | 60 |
@@ -160,7 +160,7 @@ A run that times out or fails never stops the others, and it keeps what was said
 
 The results file is JSON. It holds the settings, the status counts and the total cost, and one entry per scenario, in the order of the scenarios (not the order they finished). Each entry has the status, the error if there was one, the outcome, the whole transcript, the cost of that run alone, the timing, the timeout the run had (a scenario can have one of its own, so it is not always the default in `settings`) and, to help a judge, the persona, goal and expectations of the scenario. A target that keeps a log of its agent's tool calls (the fake shop does) also gets `tool_calls` in the entry. For a target that keeps none, the key is left out, because an empty list would mean "no tools were called". The `results/` folder is not kept in git.
 
-To see a `timed_out` run, play the scenario that times out on purpose together with the others: `uv run python -m evaluator.runner parallel shop --scenarios scenarios/shop.toml scenarios/shop_timeout.toml`. It ends with exit code 3.
+To see a `timed_out` run, play the scenario that times out on purpose together with the others: `uv run python -m evaluator.runner parallel shop --scenario-file scenarios/shop.toml --scenario-file scenarios/shop_timeout.toml`. It ends with exit code 3.
 
 ### Expectations and the tool-call log
 
