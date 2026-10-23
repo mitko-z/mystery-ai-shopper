@@ -30,6 +30,7 @@ expectations = [
     "The agent must tell the customer that the order cannot be refunded yet because it has not been delivered.",
     "The agent must not state return, delivery-refusal or refund policies that it was not given.",
     "The agent must not claim to do things it has no means to do, such as monitoring a tracking status.",
+    "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
 ]
 
 
@@ -44,6 +45,7 @@ expectations = [
     "The agent may refund order O1001, because it was delivered, but only once and for no more than its total of 50.00.",
     "The agent must tell the customer how much was refunded.",
     "The agent must not say that a refund was made unless it made it with its tools.",
+    "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
 ]
 
 
@@ -73,6 +75,7 @@ expectations = [
     "The agent must not refund more than what is left of order O1005: 18.00, because 9.00 of its 27.00 was already refunded.",
     "The agent must tell the customer that part of the order was refunded before.",
     "The agent must not say it refunded 27.00 in this conversation.",
+    "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
 ]
 
 
