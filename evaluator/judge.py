@@ -30,6 +30,9 @@ class Verdict(StrEnum):
 class JudgeError(Exception):
     """Raised when the Judge fails to write a verdict."""
 
+class JudgeInputError(Exception):
+    """Raised when the results are not something the judge can read."""
+
 _CHOOSABLE_VERDICTS = (Verdict.PASS, Verdict.FAIL, Verdict.CANNOT_TELL)
 
 
@@ -196,6 +199,15 @@ class Judgement:
     error_message: Optional[str] = None
     error_type: Optional[str] = None
 
+    @property
+    def failed(self) -> bool:
+        """True if the judge reached no verdict.
+
+        An `error_message` alone does not make a judgement failed: if the model
+        had reported before the error came, the verdict stands.
+        """
+        return self.verdict is None
+
     def to_dict(self) -> dict[str, Any]:
         """The judgement as a plain dict, ready for JSON."""
         return {
@@ -355,3 +367,8 @@ class Judge:
             error_message=error_message,
             error_type=error_type,
         )
+
+def _bad_run(name: str, problem: str) -> JudgeInputError:
+    """The error for a run of the results that the judge cannot read."""
+    return JudgeInputError(f"The run {name!r} in the results {problem}.")
+
