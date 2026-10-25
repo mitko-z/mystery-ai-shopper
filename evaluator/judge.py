@@ -6,6 +6,8 @@ there is one) and reports a verdict.
 
 import asyncio
 import json
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Optional
@@ -14,6 +16,7 @@ from core.agent_loop import AgentSpec, get_complete_reply
 from core.app_types import History, Tools
 from core.usage import Usage, track_usage
 
+logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "v1"
 
@@ -368,7 +371,133 @@ class Judge:
             error_type=error_type,
         )
 
+
+# What the runner calls a run that ended by itself (`RunStatus.FINISHED`). Only such
+# a run has a transcript worth judging.
+_FINISHED = "finished"
+
+_MESSAGE_KEYS = {"number", "speaker", "text"}
+_TOOL_CALL_KEYS = {"name", "arguments", "result"}
+
+
 def _bad_run(name: str, problem: str) -> JudgeInputError:
     """The error for a run of the results that the judge cannot read."""
     return JudgeInputError(f"The run {name!r} in the results {problem}.")
 
+
+def select_runs(report: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], list[dict[str, str]]]:
+    """Split the runs of a results file into those to judge and those to skip.
+
+    A run is judged only if it finished and its scenario has expectations. The
+    others are not an error: they are listed with the reason, so that nothing
+    drops out of the judge's file without a word.
+
+    Args:
+        report: The content of a results file, see `evaluator.runner.build_report`.
+
+    Returns:
+        The runs to judge, and the skipped ones as `{"scenario": ..., "reason": ...}`.
+        Both are in the order of the file.
+
+    Raises:
+        JudgeInputError: If the results hold no list of runs, or a run to judge lacks
+            something the judge reads. It is checked here, once, so that a wrong file
+            is one clear message and not a crash in the middle of a batch.
+    """
+    runs = report.get("runs") if isinstance(report, Mapping) else None
+    if not isinstance(runs, list):
+        raise JudgeInputError("The results hold no list of runs.")
+
+    selected: list[Mapping[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for run in runs:
+        if not isinstance(run, Mapping) or not isinstance(run.get("scenario"), str) or "status" not in run:
+            raise JudgeInputError("A run in the results has no scenario name or no status.")
+        name = run["scenario"]
+        if run["status"] != _FINISHED:
+            skipped.append({"scenario": name, "reason": f"the run did not finish (status: {run['status']})"})
+            continue
+
+        expectations, transcript = run.get("expectations"), run.get("transcript")
+        if not isinstance(expectations, list) or not all(isinstance(item, str) for item in expectations):
+            raise _bad_run(name, "has no list of expectations (sentences)")
+        if not isinstance(transcript, list) or not all(
+            isinstance(message, Mapping) and _MESSAGE_KEYS <= message.keys() for message in transcript
+        ):
+            raise _bad_run(name, "has no transcript of messages with a number, a speaker and a text")
+        tool_calls = run.get("tool_calls")
+        if tool_calls is not None and (not isinstance(tool_calls, list) or not all(
+            isinstance(call, Mapping) and _TOOL_CALL_KEYS <= call.keys() for call in tool_calls
+        )):
+            raise _bad_run(name, "has a tool log that is not a list of calls with a name, arguments and a result")
+
+        if not expectations:
+            skipped.append({"scenario": name, "reason": "the scenario has no expectations"})
+            continue
+        selected.append(run)
+    return selected, skipped
+
+
+async def judge_runs(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    use_tool_log: bool = False,
+    max_parallel: int = MAX_PARALLEL,
+    timeout: float = TIMEOUT,
+    max_calls: int = MAX_CALLS,
+    on_judged: Optional[Callable[[Judgement], None]] = None,
+) -> list[Judgement]:
+    """Judge every expectation of `runs`, several at a time.
+
+    Each expectation gets a `Judge` of its own, and runs in isolation (see
+    `Judge.judge`): a judgement that fails or times out only ends itself. Its
+    result says so, and the others go on. Because failures are results, they are
+    not raised.
+
+    At most `max_parallel` judgements are active at once. The others wait for a
+    free slot, and the wait does not count against their timeout.
+
+    Args:
+        runs: The runs to judge, as `select_runs` returns them.
+        use_tool_log: Whether to give the model the tool log. A run without a
+            `tool_calls` entry has none to give, and is judged from the transcript alone.
+            That shows in `tool_log_given` of its judgements.
+        max_parallel: The most judgements active at the same time. At least 1.
+        timeout: Seconds one judgement may take.
+        max_calls: The most model calls one judgement may make.
+        on_judged: Called with each judgement as soon as it is over, in the order they
+            finish. A callback that raises is logged and ignored, so reporting can
+            never lose a result.
+
+    Returns:
+        One judgement per expectation: the runs in the order of `runs`, and in each
+        run the expectations in their order. Not the order they finished.
+
+    Raises:
+        ValueError: If `max_parallel` is less than 1.
+    """
+    if max_parallel < 1:
+        raise ValueError(f"Max parallel judgements must be >= 1, got {max_parallel}")
+
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def worker(run: Mapping[str, Any], number: int, expectation: str) -> Judgement:
+        tool_calls = run.get("tool_calls") if use_tool_log else None
+        judge = Judge(run["scenario"], number, expectation, run["transcript"], tool_calls)
+        async with semaphore:
+            judgement = await judge.judge(timeout=timeout, max_calls=max_calls)
+        if on_judged is not None:
+            try:
+                on_judged(judgement)
+            except Exception:
+                logger.exception(
+                    "The on_judged callback failed for %r #%d. Its result is kept.",
+                    judgement.scenario, judgement.expectation_number,
+                )
+        return judgement
+
+    return list(await asyncio.gather(*(
+        worker(run, number, expectation)
+        for run in runs
+        for number, expectation in enumerate(run["expectations"], start=1)
+    )))
