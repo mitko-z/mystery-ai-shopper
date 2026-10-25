@@ -10,9 +10,10 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Optional, Union
 
-from core.agent_loop import AgentSpec, get_complete_reply
+from core.agent_loop import DEFAULT_MODEL, AgentSpec, get_complete_reply
 from core.app_types import History, Tools
 from core.usage import Usage, track_usage
 
@@ -24,6 +25,8 @@ PROMPT_VERSION = "v1"
 MAX_PARALLEL = 5
 TIMEOUT = 60 # sec
 MAX_CALLS = 6
+
+EVALUATIONS_FOLDER = Path("evaluations")
 
 class Verdict(StrEnum):
     PASS = "pass"
@@ -501,3 +504,77 @@ async def judge_runs(
         for run in runs
         for number, expectation in enumerate(run["expectations"], start=1)
     )))
+
+
+def load_results(path: Union[str, Path]) -> dict[str, Any]:
+    """Read a results file.
+
+    Args:
+        path: The file the runner wrote, e.g. `results/shop-20261023-185334.json`.
+
+    Returns:
+        The content as a dict. Whether it holds runs the judge can read is for
+        `select_runs` to say.
+
+    Raises:
+        JudgeInputError: If the file cannot be read, is not UTF-8 JSON, or does not
+            hold a JSON object.
+    """
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise JudgeInputError(f"Cannot read the results file {path}: {e.strerror or e}") from e
+    except UnicodeDecodeError as e:
+        raise JudgeInputError(f"The results file {path} is not UTF-8 text.") from e
+    try:
+        report = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise JudgeInputError(f"The results file {path} is not valid JSON: {e}") from e
+    if not isinstance(report, dict):
+        raise JudgeInputError(f"The results file {path} does not hold a JSON object.")
+    return report
+
+
+def default_out_path(results_path: Union[str, Path], use_tool_log: bool) -> Path:
+    """Where the judge's file goes unless told otherwise.
+
+    The name comes from the results file, so the two belong together by name, and
+    it says which version of the rules and which mode made it. Example:
+    `evaluations/shop-20261023-185334.judge-v1.json`, and
+    `evaluations/shop-20261023-185334.judge-v1-toollog.json` with the tool log.
+    """
+    mode = "-toollog" if use_tool_log else ""
+    return EVALUATIONS_FOLDER / f"{Path(results_path).stem}.judge-{PROMPT_VERSION}{mode}.json"
+
+
+def build_judge_report(
+    judgments: Sequence[Judgement],
+    skipped_runs: Sequence[Mapping[str, str]],
+    *,
+    use_tool_log: bool,
+    totals: Usage,
+) -> dict[str, Any]:
+    """The content of the judge's file, as a plain dict ready for JSON.
+
+    The file records exactly what the judge was told (`rules`), so that two files
+    made with different versions of the rules can be told apart and compared.
+
+    Args:
+        judgments: The result of each expectation, as `judge_runs` returns them.
+        skipped_runs: The runs that were not judged, as `select_runs` returns them.
+        use_tool_log: Whether the judge was asked to use the tool log. A run without a
+            log was still judged without it: `tool_log_given` of each verdict says.
+        totals: What all the judging cost.
+    """
+    return {
+        "judge": {
+            "model": DEFAULT_MODEL,
+            "prompt_version": PROMPT_VERSION,
+            "mode": "tool_log" if use_tool_log else "transcript",
+            "rules": {"common": _RULES, "transcript": _VIEW_TRANSCRIPT, "tool_log": _VIEW_TOOL_LOG},
+        },
+        "totals": totals.to_dict(),
+        "skipped_runs": list(skipped_runs),
+        "verdicts": [judgement.to_dict() for judgement in judgments],
+    }
