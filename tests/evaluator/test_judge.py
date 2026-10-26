@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import re
-from types import SimpleNamespace
 
 import pytest
 
@@ -25,12 +24,12 @@ from evaluator.judge import (
 )
 from tests.fakes import (
     FakeHttpError,
-    FakeStep,
     HangingInteractions,
+    JudgingInteractions,
     ScriptedInteractions,
     Turn,
-    call_step,
     reply_step,
+    report_step,
     reported_usage,
     use_fake,
     user_step,
@@ -53,11 +52,6 @@ TOOL_CALLS = [
 NOT_SENT = "(not sent to the agent)"
 
 
-def report_step(verdict="fail", evidence="Message 2: 'It is shipped'", reasoning="It refused.", call_id="r1"):
-    """The model's `report_verdict` call."""
-    return call_step(call_id, "report_verdict", {"evidence": evidence, "reasoning": reasoning, "verdict": verdict})
-
-
 def make_judge(tool_calls=None, expectation=EXPECTATION, transcript=TRANSCRIPT):
     return Judge("refund_o1002", 1, expectation, transcript, tool_calls)
 
@@ -68,44 +62,6 @@ def make_run(name="refund", expectations=("The agent must be polite.",), tool_ca
     if tool_calls is not None:
         run["tool_calls"] = tool_calls
     return {**run, **extra}
-
-
-class JudgingInteractions:
-    """Stands in for `client.aio.interactions` when many judgements run at the same time.
-
-    The first call of a conversation reports a verdict through the tool and the call
-    after the tool's result says Done. `verdicts` maps a text of the expectation to the
-    verdict given for it (default `pass`); None means the model does not use the tool.
-    `delays` maps a text of the expectation to the seconds its calls take. It keeps
-    every call, the first message of each conversation, and the most calls at once.
-    """
-
-    def __init__(self, verdicts=None, delay=0.0, delays=None):
-        self.verdicts = verdicts or {}
-        self.delay = delay
-        self.delays = delays or {}
-        self.calls = []
-        self.messages = []
-        self.peak = 0
-        self._active = 0
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        message = kwargs["input"][0]["content"][0]["text"]
-        expectation = message.split("\n\nConversation:")[0]
-        self._active += 1
-        self.peak = max(self.peak, self._active)
-        try:
-            await asyncio.sleep(next((s for marker, s in self.delays.items() if marker in expectation), self.delay))
-            if kwargs["input"][-1]["type"] == "function_result":
-                steps = [reply_step("Done.")]
-            else:
-                self.messages.append(message)
-                verdict = next((v for marker, v in self.verdicts.items() if marker in expectation), "pass")
-                steps = [report_step(verdict)] if verdict is not None else [reply_step("I will not use the tool.")]
-            return SimpleNamespace(steps=[FakeStep(**step) for step in steps], usage=None)
-        finally:
-            self._active -= 1
 
 
 # --- the text the judge reads ---

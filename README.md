@@ -8,7 +8,7 @@ Everything specific to the system under test (here a fake shop and its support a
 | Folder | What it holds |
 | --- | --- |
 | `core/` | Reusable plumbing with no domain knowledge: configuration, shared types, the Gemini agent loop (`agent_loop.py`) and the tool-call recorder (`tool_recorder.py`). |
-| `evaluator/` | The tester. A simulated customer (`customer.py`) with a persona and a secret goal chats with any `Target` (`target.py`, `http_target.py`), and `runner.py` runs a `Scenario` and prints the conversation. |
+| `evaluator/` | The tester. A simulated customer (`customer.py`) with a persona and a secret goal chats with any `Target` (`target.py`, `http_target.py`), and `runner.py` runs a `Scenario` and records the conversation. `judge.py` judges whether the target met the expectations of a scenario, `agreement.py` compares the judge with our own verdicts, and `cli.py` is the command line for all of it (`python -m evaluator`). |
 | `targets/` | One module per system under test: how to reach it and which scenarios to run against it. `targets/shop.py` is the entry for the fake shop. |
 | `shop/` | The fake shop and everything that belongs to it: `store.py` and `seed.py` (the shop), `support_agent.py` (the agent's prompt and tools), `session.py` (one conversation with the agent), `app.py` (the HTTP API), `static/` (the demo page) and `tests/` (their tests). |
 
@@ -88,10 +88,10 @@ Errors:
 
 ## Run a scenario with the simulated customer
 
-The runner has two modes. `single` plays one scenario and shows the conversation live. `parallel` plays many at once and writes a results file (see [Run many scenarios at once](#run-many-scenarios-at-once)).
+The command line has four commands, started as `python -m evaluator <command>`. `single` plays one scenario and shows the conversation live. `parallel` plays many at once and writes a results file (see [Run many scenarios at once](#run-many-scenarios-at-once)). `judge` and `agreement` work on such a file afterwards (see [Judge a results file](#judge-a-results-file)).
 
 ```
-uv run python -m evaluator.runner single shop refund_o1002
+uv run python -m evaluator single shop refund_o1002
 ```
 
 A second AI agent plays a customer with a persona and a secret goal (here: Alex, who wants a refund for order `O1002`). It chats with the support agent of the fake shop, decides when it is done or gives up, and the whole conversation is printed as it happens, followed by the outcome: `goal_achieved`, `gave_up`, or `cut_off` when the message limit is reached. The last line reports what the run cost: the number of model calls and, as far as the API reports them, the tokens (input, output, thought and total). It is printed even when the run fails. A run may make at most 60 model calls (cancelled ones included), as a brake against a conversation that loops. Change the limit with `--max-calls N`. When it is reached, the run stops with an error and the conversation so far is still shown. A model call that fails with a rate limit (429) or a server error (5xx) is tried again up to 3 times, after pauses of about 2, 4 and 8 seconds. If the server asks for a longer wait than 30 seconds, as a daily quota does, the run fails at once instead of waiting. Other errors, such as a wrong key, are not retried. A call that is cancelled (for example by a timeout) never gets a response, so its tokens are unknown: it is counted as `Calls cancelled`, and the token totals are then lower than what was really used. It needs `GEMINI_API_KEY` (see [Setup](#setup)) and makes real model calls. No server has to run: the shop is called in the same process through its HTTP API, and a run always starts from a fresh shop.
@@ -103,7 +103,7 @@ To test another system, add a module `targets/<name>.py` with:
 - `open_target()`: an async context manager that yields an object with `async send(message) -> reply` (see `evaluator/target.py`). `HttpChatTarget` already covers any system with a `POST /chat` endpoint taking `conversation_id` and `message` and answering `{"reply": ...}`.
 - `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit, timeout and written expectations). The easy way to get one is to write the scenarios in a TOML file and load it with `load_scenarios` (see [Scenario files](#scenario-files)).
 
-Then run `uv run python -m evaluator.runner single <name> <scenario>` for one scenario, or `uv run python -m evaluator.runner parallel <name>` for all of them. The system under test needs no changes.
+Then run `uv run python -m evaluator single <name> <scenario>` for one scenario, or `uv run python -m evaluator parallel <name>` for all of them. The system under test needs no changes.
 
 ### Scenario files
 
@@ -129,7 +129,7 @@ The scenario `status_o1004_timeout` has `timeout_seconds = 1` on purpose. One se
 **Warning:** this makes many real model calls (about 6 to 8 per scenario) and uses your API quota.
 
 ```
-uv run python -m evaluator.runner parallel shop
+uv run python -m evaluator parallel shop
 ```
 
 All scenarios of the target run at the same time, each in a conversation and a shop of its own. A line is printed as each one finishes, then a summary: how many runs finished, timed out or failed, what all of it cost, and where the results are. The options:
@@ -160,7 +160,7 @@ A run that times out or fails never stops the others, and it keeps what was said
 
 The results file is JSON. It holds the settings, the status counts and the total cost, and one entry per scenario, in the order of the scenarios (not the order they finished). Each entry has the status, the error if there was one, the outcome, the whole transcript, the cost of that run alone, the timing, the timeout the run had (a scenario can have one of its own, so it is not always the default in `settings`) and, to help a judge, the persona, goal and expectations of the scenario. A target that keeps a log of its agent's tool calls (the fake shop does) also gets `tool_calls` in the entry. For a target that keeps none, the key is left out, because an empty list would mean "no tools were called". The `results/` folder is not kept in git.
 
-To see a `timed_out` run, play the scenario that times out on purpose together with the others: `uv run python -m evaluator.runner parallel shop --scenario-file scenarios/shop.toml --scenario-file scenarios/shop_timeout.toml`. It ends with exit code 3.
+To see a `timed_out` run, play the scenario that times out on purpose together with the others: `uv run python -m evaluator parallel shop --scenario-file scenarios/shop.toml --scenario-file scenarios/shop_timeout.toml`. It ends with exit code 3.
 
 ### Expectations and the tool-call log
 
@@ -171,6 +171,38 @@ Besides the conversation, a target may also be able to tell which tools its agen
 To offer it, give the target a `tool_calls()` method that returns the calls made so far (the `ToolCallSource` protocol in `evaluator/target.py`). It is worth having because an agent's words can differ from its actions: it may say "I have refunded your order" without having done so. A judge that only reads the conversation can be fooled by that, and the tool-call list lets us check its verdict against what really happened.
 
 If a target keeps no such list, do not add the method. Do not return an empty list instead, because an empty list means "the agent called no tools", and a missing method means "we cannot tell". The fake shop offers the list because its code runs in the same process (`targets/shop.py`).
+
+## Judge a results file
+
+**Warning:** this makes real model calls (about 2 for each expectation) and uses your API quota.
+
+```
+uv run python -m evaluator judge results/shop-20261023-185334.json
+```
+
+The judge reads a results file and, for every run that `finished`, decides for each expectation of its scenario whether the target met it. Each expectation is judged in a short conversation of its own with a model. The model sees that one expectation and the transcript, and reports `pass`, `fail` or `cannot_tell` through a tool, with the evidence it relies on and its reasoning. `cannot_tell` is the honest answer when the conversation does not show enough, for example whether the agent really looked something up first. The judge never sees the persona, the goal, the customer's own outcome, the other expectations or anything of our own verdicts. A customer message at the very end of a transcript is the goodbye that was never sent to the target, and is marked so.
+
+With `--tool-log` the judge also gets the target's log of tool calls, for the runs that have one. Without it, or for a run without a log, it works from the conversation alone. Runs that did not finish, or whose scenario has no expectations, are not judged. They are listed in the file with the reason.
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `--tool-log` | also give the judge the tool log of each run that has one | off |
+| `--out FILE` | where to write the judgements | `evaluations/<results name>.judge-v1.json`, or `.judge-v1-toollog.json` with `--tool-log` |
+| `--max-parallel N` | the most judgements active at the same time | 5 |
+| `--timeout SECONDS` | how long one judgement may take | 60 |
+| `--max-calls N` | the most model calls one judgement may make | 6 |
+
+A judge file is never overwritten, and this is checked before any model call. The first judgement of a version of the rules is kept: change the rules, and the new file gets a new version in its name. The file records the model, the version, the mode and the full text the judge was told, the cost, the runs that were left out, and a verdict with its evidence and reasoning for every expectation. The exit code is 0 when every expectation got a verdict, 1 when it could not run (a wrong file, nothing to judge, a file that exists, a missing API key), 2 for a wrong command line, 3 when at least one judgement got no verdict (the file is written all the same) and 130 after Ctrl+C. A verdict that was reported stands, also if an error came after it.
+
+### Compare the judge with our own verdicts
+
+```
+uv run python -m evaluator agreement evaluations/shop-20261023-185334.ground-truth.json evaluations/shop-20261023-185334.judge-v1.json
+```
+
+The key, `evaluations/<results name>.ground-truth.json`, holds our own verdict (`pass`, `fail` or `unclear`) for each expectation of one results file, with a line of evidence. A person writes it, with the tool log and the agent's instruction at hand, before the judge is run. `needs_tool_log` marks an expectation whose verdict depends on something the judge cannot see.
+
+The command writes a Markdown table with a row for each expectation: our verdict, the judge's, and whether they agree. A `cannot_tell` of the judge is expected where the expectation needs the tool log, and a miss anywhere else. The summary counts the rows with and without the duplicate row (`covered_by`), and separately for the expectations that the transcript is enough for and those that need the log. A row that needs a cause (a disagreement, a missing verdict or a missed `cannot_tell`) says `TODO` in its last cell, for a person to replace with a line. Because of that, an existing table is kept unless you add `--overwrite`. `--out FILE` names the table; by default it goes beside the judge file, with `.judge-` replaced by `.agreement-`. The command makes no model call. It exits with 0, or with 1 if the files cannot be read, do not belong together, or the table exists.
 
 ## Tests
 

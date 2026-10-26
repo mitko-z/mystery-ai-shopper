@@ -1,27 +1,17 @@
 import asyncio
 import json
-import sys
-from contextlib import asynccontextmanager
-from types import ModuleType
 
 import pytest
 
-from core import agent_loop, config
-from core.usage import Usage
-from evaluator import runner
 from evaluator.customer import CustomerError
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.runner import Message, Speaker, Transcript, run_scenario
 from evaluator.scenario import Scenario
-from evaluator.scenario_file import ScenarioFileError
 from evaluator.target import Target, TargetError
 from tests.fakes import (
-    FakeHttpError,
     ScriptedInteractions,
-    Turn,
     call_step,
     reply_step,
-    reported_usage,
     use_fake,
 )
 
@@ -194,217 +184,6 @@ async def test_what_was_said_before_a_customer_failure_is_kept(monkeypatch):
     assert transcript.outcome is None
 
 
-# --- command line ---
-
-def fake_target_module(monkeypatch, target, scenarios=None):
-    """Register a target module named `targets.fake` that opens `target`."""
-    module = ModuleType("targets.fake")
-
-    @asynccontextmanager
-    async def open_target():
-        yield target
-
-    module.open_target = open_target
-    module.SCENARIOS = scenarios if scenarios is not None else {"refund": make_scenario()}
-    monkeypatch.setitem(sys.modules, "targets.fake", module)
-
-
-def test_main_prints_the_conversation(monkeypatch, capsys):
-    """A run prints the header, the numbered conversation and the outcome, and exits with 0."""
-    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
-    fake_target_module(monkeypatch, StubTarget("Hello"))
-
-    code = runner.main(["single", "fake", "refund"])
-
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "Scenario: refund" in out
-    assert "Persona: You are Alex." in out
-    assert "Secret goal: Get a refund." in out
-    assert "1. Customer: Hi" in out
-    assert "2. Agent: Hello" in out
-    assert "3. Customer: Thanks, bye." in out
-    assert "Outcome: gave_up - Refused." in out
-
-
-def test_main_names_the_available_targets_when_given_an_unknown_one(capsys):
-    """A typo in the target name lists what exists, and exits with 1."""
-    code = runner.main(["single", "nosuch", "refund"])
-
-    err = capsys.readouterr().err
-    assert code == 1
-    assert "Unknown target 'nosuch'" in err
-    assert "shop" in err
-
-
-def test_main_names_the_available_scenarios_when_given_an_unknown_one(monkeypatch, capsys):
-    """A typo in the scenario name lists what the target has."""
-    fake_target_module(monkeypatch, StubTarget())
-
-    code = runner.main(["single", "fake", "nosuch"])
-
-    err = capsys.readouterr().err
-    assert code == 1
-    assert "Unknown scenario 'nosuch'" in err
-    assert "refund" in err
-
-
-def test_main_reports_a_target_failure_in_one_line(monkeypatch, capsys):
-    """A failing target ends the run with a short message instead of a traceback."""
-    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")]))
-    fake_target_module(monkeypatch, FailingTarget())
-
-    code = runner.main(["single", "fake", "refund"])
-
-    captured = capsys.readouterr()
-    assert code == 1
-    assert captured.err.strip() == "error: boom"
-    assert "1. Customer: Hi" in captured.out  # what was said before the failure is still shown
-
-
-# --- what a run cost ---
-
-class ModelBackedTarget(Target):
-    """A target that answers with a model call of its own, as the shop's support agent does."""
-
-    async def send(self, message):
-        history = []
-        spec = agent_loop.AgentSpec(system_instruction="you are support", tool_schemas=[])
-        await agent_loop.get_complete_reply({}, history, message, spec)
-        return agent_loop.final_text(history)
-
-
-def test_format_usage_names_calls_and_tokens():
-    usage = Usage(calls=7, input_tokens=5120, output_tokens=410, thought_tokens=880, total_tokens=6410)
-
-    assert runner.format_usage(usage) == (
-        "Model calls: 7 | Tokens: input 5,120, output 410, thought 880, total 6,410"
-    )
-
-
-def test_format_usage_names_calls_that_reported_no_usage():
-    usage = Usage(calls=7, input_tokens=100, total_tokens=100, calls_without_usage=2)
-
-    assert runner.format_usage(usage).endswith(
-        " | Calls without a usage report: 2 (tokens are incomplete)"
-    )
-
-
-def test_format_usage_of_an_unused_run():
-    assert runner.format_usage(Usage()) == (
-        "Model calls: 0 | Tokens: input 0, output 0, thought 0, total 0"
-    )
-
-
-def test_main_prints_what_the_run_cost_counting_the_customer_and_the_target(monkeypatch, capsys):
-    """Calls of the customer and of the target's own model are summed in one line."""
-    finish_call, goodbye = finish_turns()
-    use_fake(monkeypatch, ScriptedInteractions(
-        Turn([reply_step("Hi")], reported_usage(input=100, output=10, total=110)),
-        Turn([reply_step("Hello")], reported_usage(input=50, output=5, thought=5, total=60)),
-        Turn(finish_call, reported_usage(input=200, output=10, total=210)),
-        Turn(goodbye, reported_usage(input=220, output=5, total=225)),
-    ))
-    fake_target_module(monkeypatch, ModelBackedTarget())
-
-    code = runner.main(["single", "fake", "refund"])
-
-    lines = capsys.readouterr().out.splitlines()
-    assert code == 0
-    assert lines[-2] == "Outcome: gave_up - Refused."
-    assert lines[-1] == "Model calls: 4 | Tokens: input 570, output 30, thought 5, total 605"
-
-
-def test_main_still_prints_what_the_run_cost_when_it_fails(monkeypatch, capsys):
-    """The calls made before a failure cost money too, so they are reported."""
-    use_fake(monkeypatch, ScriptedInteractions(
-        Turn([reply_step("Hi")], reported_usage(input=100, output=10, total=110)),
-    ))
-    fake_target_module(monkeypatch, FailingTarget())
-
-    code = runner.main(["single", "fake", "refund"])
-
-    captured = capsys.readouterr()
-    assert code == 1
-    assert captured.out.splitlines()[-1] == (
-        "Model calls: 1 | Tokens: input 100, output 10, thought 0, total 110"
-    )
-    assert "Outcome:" not in captured.out
-    assert captured.err.strip() == "error: boom"
-
-
-def test_main_prints_no_cost_for_a_run_that_never_started(capsys):
-    """A mistyped target name is a usage error, not a run."""
-    runner.main(["single", "nosuch", "refund"])
-
-    assert "Model calls" not in capsys.readouterr().out
-
-
-def test_format_usage_names_cancelled_calls():
-    usage = Usage(calls=3, input_tokens=100, total_tokens=100, calls_cancelled=1)
-
-    assert runner.format_usage(usage).endswith(" | Calls cancelled (tokens unknown): 1")
-
-
-# --- the call limit ---
-
-def test_main_stops_a_run_that_reaches_the_call_limit(monkeypatch, capsys):
-    """The run ends as an error; what was said and what it cost are still shown."""
-    use_fake(monkeypatch, ScriptedInteractions([reply_step("Hi")], *finish_turns()))
-    fake_target_module(monkeypatch, StubTarget("Hello"))
-
-    code = runner.main(["single", "fake", "refund", "--max-calls", "2"])
-
-    captured = capsys.readouterr()
-    assert code == 1
-    assert captured.err.strip() == "error: This run reached its limit of 2 model calls."
-    assert "1. Customer: Hi" in captured.out
-    assert "2. Agent: Hello" in captured.out
-    assert "Model calls: 2" in captured.out
-    assert "Outcome:" not in captured.out
-
-
-@pytest.mark.parametrize("value", ["0", "-3"])
-def test_main_rejects_a_call_limit_below_one(value, capsys):
-    with pytest.raises(SystemExit) as exit_info:
-        runner.main(["single", "fake", "refund", "--max-calls", value])
-
-    assert exit_info.value.code == 2
-    assert "--max-calls must be at least 1" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    "extra_args, expected",
-    [([], config.DEFAULT_CALLS_PER_RUN), (["--max-calls", "7"], 7)],
-)
-def test_main_gives_the_run_its_call_limit(extra_args, expected, monkeypatch):
-    seen = {}
-
-    async def fake_run(target_name, scenario_name, max_calls):
-        seen["max_calls"] = max_calls
-
-    monkeypatch.setattr(runner, "_single_command", fake_run)
-
-    runner.main(["single", "fake", "refund", *extra_args])
-
-    assert seen == {"max_calls": expected}
-
-
-# --- a model that fails ---
-
-def test_main_reports_a_failing_model_in_one_line(monkeypatch, capsys):
-    """When the model keeps failing, the run ends with a short message, not a traceback."""
-    use_fake(monkeypatch, ScriptedInteractions(*[FakeHttpError(503) for _ in range(4)]))
-    fake_target_module(monkeypatch, StubTarget("Hello"))
-
-    code = runner.main(["single", "fake", "refund"])
-
-    captured = capsys.readouterr()
-    assert code == 1
-    assert captured.err.startswith("error: The model call failed:")
-    assert "Model calls: 0" in captured.out
-
-
 # --- the JSON-safe form ---
 
 @pytest.mark.parametrize(
@@ -417,20 +196,3 @@ def test_a_message_becomes_a_plain_dict(speaker, key):
     assert as_dict == {"number": 3, "speaker": key, "text": "Hello"}
     assert type(as_dict["speaker"]) is str
     assert json.loads(json.dumps(as_dict)) == as_dict
-
-
-# --- a scenario file that is wrong ---
-
-def test_main_reports_a_wrong_scenario_file_in_one_line(monkeypatch, capsys):
-    """A mistake in the file ends the run with the message that names it, not a traceback."""
-    def broken_target(name):
-        raise ScenarioFileError("scenarios.toml: scenario 'refund': the key 'goal' is missing.")
-
-    monkeypatch.setattr(runner, "load_target", broken_target)
-
-    code = runner.main(["single", "fake", "refund"])
-
-    captured = capsys.readouterr()
-    assert code == 1
-    assert captured.err.strip() == "error: scenarios.toml: scenario 'refund': the key 'goal' is missing."
-    assert "Model calls" not in captured.out

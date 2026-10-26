@@ -11,7 +11,7 @@ import pytest
 from core import agent_loop, config
 from core import usage as usage_module
 from core.usage import Usage
-from evaluator import runner
+from evaluator import cli, runner
 from evaluator.target import Target, TargetError
 from tests.evaluator.helpers import make_scenarios, use_scripted_customers
 from tests.fakes import FakeHttpError, ScriptedInteractions, use_fake
@@ -56,7 +56,7 @@ def register_target(monkeypatch, scenarios=(), act=hello):
 def run_parallel(tmp_path, *options, target="fake"):
     """Run `parallel` on `target` with the results in the temporary folder. Returns the exit code and the file."""
     results = tmp_path / "out.json"
-    code = runner.main(["parallel", target, "--results", str(results), *options])
+    code = cli.main(["parallel", target, "--results", str(results), *options])
     return code, results
 
 
@@ -125,7 +125,7 @@ def test_a_run_that_fails_and_one_that_times_out_are_results_and_the_others_go_o
 
     out = capsys.readouterr().out
     report = json.loads(results.read_text(encoding="utf-8"))
-    assert code == runner.EXIT_RUNS_DID_NOT_FINISH
+    assert code == cli.EXIT_SOME_FAILED
     assert [run["status"] for run in report["runs"]] == ["finished", "failed", "finished", "timed_out", "finished"]
     assert report["runs"][1]["error"] == "boom"
     assert report["runs"][3]["outcome"] is None
@@ -144,7 +144,7 @@ def test_the_call_limit_reaches_the_runs(monkeypatch, tmp_path):
     code, results = run_parallel(tmp_path, "--max-calls", "2")
 
     report = json.loads(results.read_text(encoding="utf-8"))
-    assert code == runner.EXIT_RUNS_DID_NOT_FINISH
+    assert code == cli.EXIT_SOME_FAILED
     assert [run["status"] for run in report["runs"]] == ["failed", "failed"]
     assert {run["error_type"] for run in report["runs"]} == {"CallLimitError"}
 
@@ -173,7 +173,7 @@ def test_without_a_results_option_the_file_goes_to_the_results_folder(monkeypatc
     register_target(monkeypatch, make_scenarios(1))
     monkeypatch.chdir(tmp_path)
 
-    code = runner.main(["parallel", "fake"])
+    code = cli.main(["parallel", "fake"])
 
     [written] = (tmp_path / "results").glob("fake-*.json")
     assert code == 0
@@ -190,16 +190,16 @@ def test_the_limits_have_defaults_and_can_be_changed(monkeypatch, tmp_path):
         seen.append(kwargs)
         return []
 
-    monkeypatch.setattr(runner, "run_in_parallel", spy)
+    monkeypatch.setattr(cli, "run_in_parallel", spy)
 
     run_parallel(tmp_path)
     run_parallel(tmp_path, "--max-parallel", "3", "--timeout", "7.5", "--max-calls", "11")
 
     assert (seen[0]["max_parallel"], seen[0]["default_timeout"], seen[0]["max_calls"]) == (
-        runner.DEFAULT_MAX_PARALLEL, runner.DEFAULT_TIMEOUT_SECONDS, config.DEFAULT_CALLS_PER_RUN
+        cli.DEFAULT_MAX_PARALLEL, cli.DEFAULT_TIMEOUT_SECONDS, config.DEFAULT_CALLS_PER_RUN
     )
     assert (seen[1]["max_parallel"], seen[1]["default_timeout"], seen[1]["max_calls"]) == (3, 7.5, 11)
-    assert runner.DEFAULT_MAX_PARALLEL == 5 and runner.DEFAULT_TIMEOUT_SECONDS == 120
+    assert cli.DEFAULT_MAX_PARALLEL == 5 and cli.DEFAULT_TIMEOUT_SECONDS == 120
 
 
 # --- problems are one clear line ---
@@ -258,7 +258,7 @@ def test_a_results_file_that_cannot_be_written_is_reported_after_the_runs(monkey
     blocker = tmp_path / "a_file"
     blocker.write_text("not a folder")
 
-    code = runner.main(["parallel", "fake", "--results", str(blocker / "out.json")])
+    code = cli.main(["parallel", "fake", "--results", str(blocker / "out.json")])
 
     captured = capsys.readouterr()
     assert code == 1
@@ -270,9 +270,9 @@ def test_ctrl_c_ends_the_batch_with_a_short_message(monkeypatch, capsys):
     async def interrupted(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(runner, "_parallel_command", interrupted)
+    monkeypatch.setattr(cli, "_parallel_command", interrupted)
 
-    code = runner.main(["parallel", "fake"])
+    code = cli.main(["parallel", "fake"])
 
     assert code == 130
     assert capsys.readouterr().err.strip() == "Interrupted."
@@ -292,7 +292,7 @@ def test_ctrl_c_ends_the_batch_with_a_short_message(monkeypatch, capsys):
 )
 def test_limits_that_make_no_sense_are_refused(options, message, capsys):
     with pytest.raises(SystemExit) as exit_info:
-        runner.main(["parallel", "fake", *options])
+        cli.main(["parallel", "fake", *options])
 
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
@@ -312,7 +312,7 @@ def test_limits_that_make_no_sense_are_refused(options, message, capsys):
 )
 def test_each_mode_accepts_only_its_own_arguments(argv, message, capsys):
     with pytest.raises(SystemExit) as exit_info:
-        runner.main(argv)
+        cli.main(argv)
 
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
@@ -322,11 +322,11 @@ def test_each_mode_accepts_only_its_own_arguments(argv, message, capsys):
 
 def test_the_exit_codes_are_different_for_each_kind_of_ending():
     """A script can tell a batch that could not start from one that ran but did not all finish."""
-    codes = {0, runner.EXIT_COULD_NOT_RUN, runner.EXIT_RUNS_DID_NOT_FINISH, runner.EXIT_INTERRUPTED}
+    codes = {0, cli.EXIT_COULD_NOT_RUN, cli.EXIT_SOME_FAILED, cli.EXIT_INTERRUPTED}
 
     assert len(codes) == 4
-    assert runner.EXIT_COULD_NOT_RUN == 1
-    assert runner.EXIT_RUNS_DID_NOT_FINISH == 3  # 2 is argparse's, for a command line it cannot use
+    assert cli.EXIT_COULD_NOT_RUN == 1
+    assert cli.EXIT_SOME_FAILED == 3  # 2 is argparse's, for a command line it cannot use
 
 
 def test_a_batch_in_which_every_run_finished_exits_with_0_whatever_the_customers_verdict(monkeypatch, tmp_path):
@@ -382,7 +382,7 @@ def test_a_single_run_still_exits_with_0_when_it_ends(monkeypatch):
     use_scripted_customers(monkeypatch, 1)
     register_target(monkeypatch, make_scenarios(1))
 
-    assert runner.main(["single", "fake", "s0"]) == 0
+    assert cli.main(["single", "fake", "s0"]) == 0
 
 
 # --- several scenario files ---
@@ -420,7 +420,7 @@ def test_the_target_can_come_after_the_scenario_file_option(monkeypatch, tmp_pat
     second = write_scenarios(tmp_path / "second.toml", 1)
     results = tmp_path / "out.json"
 
-    code = runner.main([
+    code = cli.main([
         "parallel", "--results", str(results), "--scenario-file", first, "--scenario-file", second, "fake",
     ])
 
@@ -436,7 +436,7 @@ def test_a_second_file_needs_the_option_again(tmp_path, capsys):
     second = write_scenarios(tmp_path / "second.toml", 1)
 
     with pytest.raises(SystemExit) as exit_info:
-        runner.main(["parallel", "fake", "--scenario-file", first, second])
+        cli.main(["parallel", "fake", "--scenario-file", first, second])
 
     assert exit_info.value.code == 2
     assert "unrecognized arguments" in capsys.readouterr().err
@@ -464,7 +464,7 @@ def test_files_that_have_a_scenario_of_the_same_name_are_refused_before_anything
 def test_an_option_name_is_not_guessed_from_its_beginning(option, capsys):
     """`--scenario` could be taken for `--scenario-file`, and `--max` for either of two limits."""
     with pytest.raises(SystemExit) as exit_info:
-        runner.main(["parallel", "fake", option, "1"])
+        cli.main(["parallel", "fake", option, "1"])
 
     assert exit_info.value.code == 2
     assert "unrecognized arguments" in capsys.readouterr().err
@@ -472,7 +472,7 @@ def test_an_option_name_is_not_guessed_from_its_beginning(option, capsys):
 
 def test_the_single_mode_does_not_guess_option_names_either(capsys):
     with pytest.raises(SystemExit) as exit_info:
-        runner.main(["single", "fake", "refund", "--max", "5"])
+        cli.main(["single", "fake", "refund", "--max", "5"])
 
     assert exit_info.value.code == 2
     assert "unrecognized arguments" in capsys.readouterr().err

@@ -9,7 +9,7 @@
 # and the status of that run are still in the results.
 #
 # To run it together with the default scenarios:
-#   uv run python -m evaluator.runner parallel shop --scenario-file scenarios/shop.toml --scenario-file scenarios/shop_timeout.toml
+#   uv run python -m evaluator parallel shop --scenario-file scenarios/shop.toml --scenario-file scenarios/shop_timeout.toml
 
 [status_o1004_timeout]
 persona = """\

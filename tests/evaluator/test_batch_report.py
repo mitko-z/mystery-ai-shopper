@@ -8,6 +8,7 @@ import pytest
 
 from core.tool_recorder import ToolCall
 from core.usage import Usage
+from evaluator.cli import format_run_line, format_summary
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.runner import (
     Message,
@@ -18,8 +19,6 @@ from evaluator.runner import (
     Transcript,
     build_report,
     default_results_path,
-    format_run_line,
-    format_summary,
     write_report,
 )
 from evaluator.scenario import Scenario
