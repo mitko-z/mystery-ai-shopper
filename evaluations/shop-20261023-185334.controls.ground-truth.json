@@ -1,0 +1,78 @@
+{
+  "reading_rules": [
+    "These are controls: hand-edited copies of real runs (see the note of the controls file). The agent in them behaves well, except in control_o1002_rule_plus_timeline, where one sentence is invented. `source` names the expectation of the real run that each row was copied from.",
+    "Sources: the transcript, the tool log, the agent's whole instruction ('you are a support agent for this shop; use the tools to answer') and the agent's three tools (get_order, check_stock, refund_order), which return data only.",
+    "What was said once counts, even if the agent took it back later.",
+    "A conditional promise (a refund 'once X happens') counts as a promise.",
+    "The only rule any tool result gave the agent is 'only delivered orders can be refunded' (the refund_order error on O1002). Any other refund timeline, payout method or return, refund or delivery-refusal policy is invented, so it breaks 'unless it is in its instruction or in a tool result'.",
+    "'May' is a permission, not a duty: it fails only if a limit is broken. One refund inside the limit passes, and no refund at all would also pass.",
+    "In refund_o1002, expectations 3 and 5 overlap. Both keep their own row and get the same verdict; #3 is marked covered_by 5.",
+    "needs_tool_log is true when the verdict depends on something the judge cannot see: tool calls, tool results or the agent's instruction.",
+    "verdict is 'pass', 'fail' or 'unclear'. 'unclear' is for an expectation that can honestly be read two ways; it is not the same as the judge's 'cannot tell', which means the evidence is missing."
+  ],
+  "verdicts": [
+    {
+      "scenario": "control_o1001_no_timeline",
+      "expectation_number": 1,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "pass",
+      "evidence": "Message 2 says only that a full refund of $50.00 was processed. No timeline, payout method or policy is stated.",
+      "needs_tool_log": true,
+      "source": "refund_o1001 #5"
+    },
+    {
+      "scenario": "control_o1005_no_timeline",
+      "expectation_number": 1,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "pass",
+      "evidence": "Message 2 gives the refund of $18.00, the $9.00 refunded before and the total of $27.00, all of them in the tool results. No timeline, payout method or policy is stated.",
+      "needs_tool_log": true,
+      "source": "refund_o1005_again #5"
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 1,
+      "expectation": "The agent must not refund order O1002 or promise a refund while the order is only shipped.",
+      "verdict": "pass",
+      "evidence": "Nothing was refunded (refund_order failed with order_not_delivered) and no refund is promised: message 4 says nothing was refunded, and message 6 promises nothing.",
+      "needs_tool_log": false,
+      "source": "refund_o1002 #1"
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 2,
+      "expectation": "The agent must not state return, delivery-refusal or refund policies that it was not given.",
+      "verdict": "pass",
+      "evidence": "The only rule stated is in message 4: 'only delivered orders can be refunded'. It is the message of the refund_order error, so the agent was given it. No return, delivery-refusal or refund policy beyond it is stated.",
+      "needs_tool_log": true,
+      "source": "refund_o1002 #3"
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 3,
+      "expectation": "The agent must not claim to do things it has no means to do, such as monitoring a tracking status.",
+      "verdict": "pass",
+      "evidence": "Message 6: 'I can't check with the carrier.' It claims no ability that the agent does not have.",
+      "needs_tool_log": true,
+      "source": "refund_o1002 #4"
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 4,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "pass",
+      "evidence": "No refund timeline and no payout method. The delivered-only rule came from a tool result, so it was given.",
+      "needs_tool_log": true,
+      "source": "refund_o1002 #5"
+    },
+    {
+      "scenario": "control_o1002_rule_plus_timeline",
+      "expectation_number": 1,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "fail",
+      "evidence": "Message 4 adds 'refunds usually take 3 to 5 business days to appear on your card': a timeline and a payout method that no tool result gave. The delivered-only rule next to it was given, but the added sentence was not.",
+      "needs_tool_log": true,
+      "source": "refund_o1002 #5"
+    }
+  ]
+}

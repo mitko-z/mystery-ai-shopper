@@ -204,6 +204,17 @@ The key, `evaluations/<results name>.ground-truth.json`, holds our own verdict (
 
 The command writes a Markdown table with a row for each expectation: our verdict, the judge's, and whether they agree. A `cannot_tell` of the judge is expected where the expectation needs the tool log, and a miss anywhere else. The summary counts the rows with and without the duplicate row (`covered_by`), and separately for the expectations that the transcript is enough for and those that need the log. A row that needs a cause (a disagreement, a missing verdict or a missed `cannot_tell`) says `TODO` in its last cell, for a person to replace with a line. Because of that, an existing table is kept unless you add `--overwrite`. `--out FILE` names the table; by default it goes beside the judge file, with `.judge-` replaced by `.agreement-`. The command makes no model call. It exits with 0, or with 1 if the files cannot be read, do not belong together, or the table exists.
 
+### Controls and repeated runs
+
+A judge can be wrong in two ways that a table of real runs may not show. Its answers vary from run to run, so run each mode a few times and look at the rows that change. And if every policy expectation of the real runs is a `fail`, a judge that fails every sentence which sounds like a policy would look perfect. So `evaluations/<name>.controls.json` holds controls: hand-edited copies of real runs in which the agent behaves well (and one in which it adds a single invented sentence), with their own key, `<name>.controls.ground-truth.json`. They have the shape of a results file, so the same commands work on them:
+
+```
+uv run python -m evaluator judge evaluations/shop-20261023-185334.controls.json
+uv run python -m evaluator agreement evaluations/shop-20261023-185334.controls.ground-truth.json evaluations/shop-20261023-185334.controls.judge-v1.json
+```
+
+A judge file is never overwritten, so a repeat of the same judging needs a name of its own: `--out evaluations/shop-20261023-185334.judge-v1-run2.json`. `evaluations/shop-20261023-185334.runs-v1.md` puts the three runs of each mode side by side for the real runs and for the controls. It was made by a one-off script, not by a command.
+
 ## Tests
 
 ```

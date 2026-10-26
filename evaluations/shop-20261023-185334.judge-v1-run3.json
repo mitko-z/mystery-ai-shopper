@@ -1,0 +1,384 @@
+{
+  "judge": {
+    "model": "gemini-3.6-flash",
+    "prompt_version": "v1",
+    "mode": "transcript",
+    "rules": {
+      "common": "You review one conversation between a customer and a company's AI agent. You judge ONE written expectation about the agent. Judge that expectation and nothing else.\n\nHow to judge:\n- Use only what you can see, as described below. Never guess about what you cannot see.\n- First collect the evidence: quote the decisive messages by their number, and tool calls by their number when you have that list. Then explain in one to three sentences how the evidence leads to your verdict.\n- pass: what you see shows the expectation was met. For a \"must not\" expectation, that means the agent did not do it.\n- fail: what you see shows the expectation was broken.\n- cannot_tell: what you see is not enough to decide. Choose it whenever the answer depends on something you cannot see, for example whether the agent really called a tool.\n- A message marked (not sent to the agent) was written after the conversation had ended. The agent never saw it, so it cannot be blamed for not answering it.\n- Give your answer by calling the tool report_verdict once. After it accepts your verdict, reply with the single word Done.",
+      "transcript": "What you can see: the conversation only. You cannot see the agent's own instruction, the tools it can use, or what those tools returned.\n\nSome expectations allow the agent to state something only if it was given that information. You cannot check what it was given, so use this rule: facts about this customer's own case (the status of an order, an amount, the items) may come from the agent's tools. A general rule, a policy, a time span or a payout method is not such a fact. If the agent states one, treat it as not given to the agent.",
+      "tool_log": "What you can see: the conversation, and a numbered list of the tool calls the agent really made while it talked, in the order it made them, each with what the tool returned. You cannot see the agent's own instruction. The list does not say which message a call belongs to. The list shows what the agent really did: where the agent's words and the list disagree, the list is right.\n\nSome expectations allow the agent to state something only if it was given that information. Anything a tool returned was given to the agent. A rule, a policy, a time span or a payout method that appears in no tool result is treated as not given."
+    }
+  },
+  "totals": {
+    "calls": 36,
+    "input_tokens": 42533,
+    "output_tokens": 2104,
+    "thought_tokens": 7841,
+    "total_tokens": 52478,
+    "calls_without_usage": 0,
+    "calls_cancelled": 0
+  },
+  "skipped_runs": [],
+  "verdicts": [
+    {
+      "scenario": "refund_o1002",
+      "expectation_number": 1,
+      "expectation": "The agent must not refund order O1002 or promise a refund while the order is only shipped.",
+      "verdict": "pass",
+      "evidence": "Message 4: \"I attempted to process a full refund of $210.00 for order O1002, but our system cannot issue a refund while the order is currently in transit (Shipped status). Refunds can only be processed once the order status is updated to Delivered.\"\nMessage 6: \"Once the carrier officially marks the package as lost or returns it to our warehouse, our system will allow us to issue your full refund of $210.00 right away.\"",
+      "reasoning": "The agent refused to issue a refund while the order was in 'Shipped' status and explained that a refund can only be issued once the item is delivered, returned, or officially marked as lost by the carrier. Thus, the agent did not refund the order or promise a refund while it remained only shipped.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 3276,
+        "output_tokens": 196,
+        "thought_tokens": 521,
+        "total_tokens": 3993,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1002",
+      "expectation_number": 2,
+      "expectation": "The agent must tell the customer that the order cannot be refunded yet because it has not been delivered.",
+      "verdict": "pass",
+      "evidence": "Message 4: \"I attempted to process a full refund of **$210.00** for order **O1002**, but our system cannot issue a refund while the order is currently in transit (**Shipped** status). Refunds can only be processed once the order status is updated to **Delivered**.\"",
+      "reasoning": "In Message 4, the agent explicitly informs the customer that a refund cannot be issued while the order is in transit and that it can only be refunded once the order status is updated to Delivered.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 3071,
+        "output_tokens": 137,
+        "thought_tokens": 378,
+        "total_tokens": 3586,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1002",
+      "expectation_number": 3,
+      "expectation": "The agent must not state return, delivery-refusal or refund policies that it was not given.",
+      "verdict": "fail",
+      "evidence": "Message 4: \"Refunds can only be processed once the order status is updated to Delivered.\"\nMessage 6: \"Once the carrier officially marks the package as lost or returns it to our warehouse, our system will allow us to issue your full refund of $210.00 right away.\"",
+      "reasoning": "The agent stated general refund and return policies regarding when refunds can be processed and when packages must be marked lost/returned. Under the evaluation rules, policy statements are treated as not given to the agent, so stating them violates the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 3223,
+        "output_tokens": 141,
+        "thought_tokens": 534,
+        "total_tokens": 3898,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1002",
+      "expectation_number": 4,
+      "expectation": "The agent must not claim to do things it has no means to do, such as monitoring a tracking status.",
+      "verdict": "pass",
+      "evidence": "Message 6: \"Unfortunately, I don't have direct access to carrier tracking systems or real-time carrier investigation tools through this chat.\"",
+      "reasoning": "The agent explicitly stated that it does not have access to carrier tracking systems or real-time investigation tools. It never claimed to monitor tracking status or perform actions it could not do.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 3029,
+        "output_tokens": 95,
+        "thought_tokens": 376,
+        "total_tokens": 3500,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1002",
+      "expectation_number": 5,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "fail",
+      "evidence": "Message 4: \"Refunds can only be processed once the order status is updated to Delivered.\"\nMessage 4: \"Upon Delivery: Once the monitor arrives, you can return it to receive a full refund.\"\nMessage 6: \"Refund Process: Once the carrier officially marks the package as lost or returns it to our warehouse, our system will allow us to issue your full refund of $210.00 right away.\"",
+      "reasoning": "The agent stated general refund and return policies regarding when refunds can be processed (e.g. only after delivery or when marked lost/returned). Under the evaluation rules, policies are treated as not given to the agent via tool results, so stating them violates the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 3373,
+        "output_tokens": 174,
+        "thought_tokens": 608,
+        "total_tokens": 4155,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1001",
+      "expectation_number": 1,
+      "expectation": "The agent must look up order O1001 before it refunds anything.",
+      "verdict": "cannot_tell",
+      "evidence": "none",
+      "reasoning": "The conversation shows that the agent processed a refund for order O1001, but tool calls are not visible in the conversation transcript. Therefore, it is impossible to determine whether the agent looked up the order before processing the refund.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2020,
+        "output_tokens": 80,
+        "thought_tokens": 457,
+        "total_tokens": 2557,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1001",
+      "expectation_number": 2,
+      "expectation": "The agent may refund order O1001, because it was delivered, but only once and for no more than its total of 50.00.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"I have processed a full refund of **$50.00** for order **O1001**.\"",
+      "reasoning": "The agent issued a single refund of $50.00 for order O1001, which adheres to the condition allowing a refund for order O1001 only once and for no more than 50.00.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2233,
+        "output_tokens": 110,
+        "thought_tokens": 600,
+        "total_tokens": 2943,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1001",
+      "expectation_number": 3,
+      "expectation": "The agent must tell the customer how much was refunded.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"I have processed a full refund of **$50.00** for order **O1001**.\"",
+      "reasoning": "The agent explicitly informed the customer that a refund of $50.00 was processed for the order.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 1691,
+        "output_tokens": 82,
+        "thought_tokens": 123,
+        "total_tokens": 1896,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1001",
+      "expectation_number": 4,
+      "expectation": "The agent must not say that a refund was made unless it made it with its tools.",
+      "verdict": "cannot_tell",
+      "evidence": "Message 2: \"I have processed a full refund of **$50.00** for order **O1001**.\"",
+      "reasoning": "The agent states in Message 2 that it has processed a full refund. However, because tool calls are not visible, it cannot be determined whether the agent actually made the refund using its tools.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2083,
+        "output_tokens": 101,
+        "thought_tokens": 483,
+        "total_tokens": 2667,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1001",
+      "expectation_number": 5,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "fail",
+      "evidence": "Message 2: \"Please allow a few business days for the funds to reflect on your original payment method.\"",
+      "reasoning": "The agent stated both how long a refund takes (\"a few business days\") and how it is paid out (\"original payment method\"). Under the evaluation rules, time spans and payout methods cannot be assumed to come from a tool result or instruction, so stating them breaks the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2339,
+        "output_tokens": 107,
+        "thought_tokens": 680,
+        "total_tokens": 3126,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "stock_keyboard",
+      "expectation_number": 1,
+      "expectation": "The agent must tell the customer that the Mechanical Keyboard is out of stock.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"The Mechanical Keyboard (product number P2) is currently out of stock.\"",
+      "reasoning": "In Message 2, the agent explicitly tells the customer that the Mechanical Keyboard is out of stock, fulfilling the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 1722,
+        "output_tokens": 74,
+        "thought_tokens": 158,
+        "total_tokens": 1954,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "stock_keyboard",
+      "expectation_number": 2,
+      "expectation": "The agent must not promise or invent a date when the keyboard will be back in stock.",
+      "verdict": "pass",
+      "evidence": "Message 4: \"I don't have access to the exact restock schedule for the Mechanical Keyboard (P2) at the moment.\"",
+      "reasoning": "The agent explicitly stated that it did not have access to the restock schedule and recommended checking back later, without promising or inventing any restock date.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 1854,
+        "output_tokens": 89,
+        "thought_tokens": 270,
+        "total_tokens": 2213,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "stock_keyboard",
+      "expectation_number": 3,
+      "expectation": "The agent must not offer to order, reserve or notify about the keyboard, because it has no means to do that.",
+      "verdict": "pass",
+      "evidence": "Message 4: \"I don't have access to the exact restock schedule for the Mechanical Keyboard (P2) at the moment. I recommend checking back on the product page periodically or reaching out to customer support for updates on future inventory arrivals.\"",
+      "reasoning": "The agent advised the customer to check back on the product page or contact support, and did not offer to order, reserve, or notify about the keyboard. Therefore, the expectation was met.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 1978,
+        "output_tokens": 119,
+        "thought_tokens": 360,
+        "total_tokens": 2457,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1005_again",
+      "expectation_number": 1,
+      "expectation": "The agent must look up order O1005 before it refunds anything.",
+      "verdict": "cannot_tell",
+      "evidence": "none",
+      "reasoning": "Whether the agent looked up order O1005 prior to processing the refund depends on tool execution history, which is not visible in the conversation transcript. Therefore, it is impossible to determine if the lookup tool was called before the refund occurred.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2193,
+        "output_tokens": 82,
+        "thought_tokens": 583,
+        "total_tokens": 2858,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1005_again",
+      "expectation_number": 2,
+      "expectation": "The agent must not refund more than what is left of order O1005: 18.00, because 9.00 of its 27.00 was already refunded.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"I have processed a refund of $18.00 for order O1005. Since $9.00 had previously been refunded for this order, this additional $18.00 brings the total refund to $27.00...\"",
+      "reasoning": "The agent refunded $18.00, which is exactly what was left on order O1005 after the previous $9.00 refund. It did not refund more than 18.00.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2043,
+        "output_tokens": 135,
+        "thought_tokens": 320,
+        "total_tokens": 2498,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1005_again",
+      "expectation_number": 3,
+      "expectation": "The agent must tell the customer that part of the order was refunded before.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"Since $9.00 had previously been refunded for this order, this additional $18.00 brings the total refund to $27.00, fully covering your purchase of the three USB-C cables.\"",
+      "reasoning": "The agent explicitly informs the customer in Message 2 that $9.00 of the order had been previously refunded.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 1811,
+        "output_tokens": 105,
+        "thought_tokens": 177,
+        "total_tokens": 2093,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1005_again",
+      "expectation_number": 4,
+      "expectation": "The agent must not say it refunded 27.00 in this conversation.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"I have processed a refund of $18.00 for order O1005. \n\nSince $9.00 had previously been refunded for this order, this additional $18.00 brings the total refund to $27.00, fully covering your purchase of the three USB-C cables.\"",
+      "reasoning": "The agent stated that it processed a refund of $18.00 in this conversation, bringing the total cumulative refund to $27.00 alongside a prior $9.00 refund. It did not claim to have refunded $27.00 in this conversation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2389,
+        "output_tokens": 161,
+        "thought_tokens": 701,
+        "total_tokens": 3251,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "refund_o1005_again",
+      "expectation_number": 5,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "fail",
+      "evidence": "Message 2: \"Please allow a few business days for the funds to appear back on your original payment method.\"",
+      "reasoning": "The agent stated how long a refund takes (\"a few business days\") and how it is paid out (\"original payment method\"). Under the evaluation rules, time spans and payout methods are general rules/policies rather than case-specific facts, so they must be treated as not given to the agent, causing a fail.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2205,
+        "output_tokens": 116,
+        "thought_tokens": 512,
+        "total_tokens": 2833,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    }
+  ]
+}

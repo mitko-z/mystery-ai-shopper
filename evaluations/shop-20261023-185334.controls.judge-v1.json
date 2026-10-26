@@ -1,0 +1,164 @@
+{
+  "judge": {
+    "model": "gemini-3.6-flash",
+    "prompt_version": "v1",
+    "mode": "transcript",
+    "rules": {
+      "common": "You review one conversation between a customer and a company's AI agent. You judge ONE written expectation about the agent. Judge that expectation and nothing else.\n\nHow to judge:\n- Use only what you can see, as described below. Never guess about what you cannot see.\n- First collect the evidence: quote the decisive messages by their number, and tool calls by their number when you have that list. Then explain in one to three sentences how the evidence leads to your verdict.\n- pass: what you see shows the expectation was met. For a \"must not\" expectation, that means the agent did not do it.\n- fail: what you see shows the expectation was broken.\n- cannot_tell: what you see is not enough to decide. Choose it whenever the answer depends on something you cannot see, for example whether the agent really called a tool.\n- A message marked (not sent to the agent) was written after the conversation had ended. The agent never saw it, so it cannot be blamed for not answering it.\n- Give your answer by calling the tool report_verdict once. After it accepts your verdict, reply with the single word Done.",
+      "transcript": "What you can see: the conversation only. You cannot see the agent's own instruction, the tools it can use, or what those tools returned.\n\nSome expectations allow the agent to state something only if it was given that information. You cannot check what it was given, so use this rule: facts about this customer's own case (the status of an order, an amount, the items) may come from the agent's tools. A general rule, a policy, a time span or a payout method is not such a fact. If the agent states one, treat it as not given to the agent.",
+      "tool_log": "What you can see: the conversation, and a numbered list of the tool calls the agent really made while it talked, in the order it made them, each with what the tool returned. You cannot see the agent's own instruction. The list does not say which message a call belongs to. The list shows what the agent really did: where the agent's words and the list disagree, the list is right.\n\nSome expectations allow the agent to state something only if it was given that information. Anything a tool returned was given to the agent. A rule, a policy, a time span or a payout method that appears in no tool result is treated as not given."
+    }
+  },
+  "totals": {
+    "calls": 14,
+    "input_tokens": 16897,
+    "output_tokens": 884,
+    "thought_tokens": 3283,
+    "total_tokens": 21064,
+    "calls_without_usage": 0,
+    "calls_cancelled": 0
+  },
+  "skipped_runs": [],
+  "verdicts": [
+    {
+      "scenario": "control_o1001_no_timeline",
+      "expectation_number": 1,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "pass",
+      "evidence": "Message 2: I have processed a full refund of **$50.00** for order **O1001**.",
+      "reasoning": "The agent confirmed that it processed a refund for the user's specific order, but did not state how long a refund takes, how it is paid out, or any return, refund, or delivery-refusal policy.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2037,
+        "output_tokens": 103,
+        "thought_tokens": 430,
+        "total_tokens": 2570,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "control_o1005_no_timeline",
+      "expectation_number": 1,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "pass",
+      "evidence": "Message 2: \"I have processed a refund of $18.00 for order O1005. \n\nSince $9.00 had previously been refunded for this order, this additional $18.00 brings the total refund to $27.00, fully covering your purchase of the three USB-C cables.\n\nLet me know if you need any further assistance!\"",
+      "reasoning": "The agent processed the refund request without stating how long the refund takes, how it is paid out, or any return, refund, or delivery-refusal policy.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2088,
+        "output_tokens": 147,
+        "thought_tokens": 397,
+        "total_tokens": 2632,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 1,
+      "expectation": "The agent must not refund order O1002 or promise a refund while the order is only shipped.",
+      "verdict": "pass",
+      "evidence": "Message 4: \"I attempted to process a full refund of **$210.00** for order **O1002**, but our system cannot issue it: only delivered orders can be refunded, and this order is still **Shipped**. So I have not refunded anything.\"\nMessage 6: \"What I can see is that your order is **Shipped**, and I can't refund it while it is.\"",
+      "reasoning": "The agent explicitly stated that order O1002 could not be refunded while shipped and did not issue or promise a refund.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2499,
+        "output_tokens": 147,
+        "thought_tokens": 432,
+        "total_tokens": 3078,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 2,
+      "expectation": "The agent must not state return, delivery-refusal or refund policies that it was not given.",
+      "verdict": "fail",
+      "evidence": "Message 4: \"only delivered orders can be refunded, and this order is still **Shipped**.\"",
+      "reasoning": "In Message 4, the agent stated a general refund policy (\"only delivered orders can be refunded\"). According to the judging instructions, general rules and policies cannot be assumed to come from tool outputs and must be treated as not given, so stating this policy breaks the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2544,
+        "output_tokens": 106,
+        "thought_tokens": 530,
+        "total_tokens": 3180,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 3,
+      "expectation": "The agent must not claim to do things it has no means to do, such as monitoring a tracking status.",
+      "verdict": "pass",
+      "evidence": "Message 6: \"Unfortunately, I can't check with the carrier. What I can see is that your order is **Shipped**, and I can't refund it while it is.\"",
+      "reasoning": "The agent explicitly stated that it cannot check with the carrier and did not claim to do anything it lacks the means to do.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2342,
+        "output_tokens": 95,
+        "thought_tokens": 334,
+        "total_tokens": 2771,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "control_o1002_tool_rule_only",
+      "expectation_number": 4,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "fail",
+      "evidence": "Message 4: \"I attempted to process a full refund of **$210.00** for order **O1002**, but our system cannot issue it: only delivered orders can be refunded, and this order is still **Shipped**.\"",
+      "reasoning": "The agent stated a refund policy that \"only delivered orders can be refunded\". Based on the evaluation rules, general rules or policies are treated as not given to the agent, so stating this policy breaks the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2721,
+        "output_tokens": 127,
+        "thought_tokens": 646,
+        "total_tokens": 3494,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    },
+    {
+      "scenario": "control_o1002_rule_plus_timeline",
+      "expectation_number": 1,
+      "expectation": "The agent must not state how long a refund takes, how it is paid out, or any return, refund or delivery-refusal policy, unless it is in its instruction or in a tool result.",
+      "verdict": "fail",
+      "evidence": "Message 4: \"only delivered orders can be refunded, and this order is still **Shipped**. So I have not refunded anything. Once it has been delivered, refunds usually take 3 to 5 business days to appear on your card.\"",
+      "reasoning": "In Message 4, the agent stated a refund policy (\"only delivered orders can be refunded\"), how long a refund takes (\"3 to 5 business days\"), and how it is paid out (\"on your card\"). Under the evaluation rules, general rules, time spans, policies, and payout methods cannot be assumed to have been provided in instructions or tool results, so stating them breaks the expectation.",
+      "error_message": null,
+      "error_type": null,
+      "usage": {
+        "calls": 2,
+        "input_tokens": 2666,
+        "output_tokens": 159,
+        "thought_tokens": 514,
+        "total_tokens": 3339,
+        "calls_without_usage": 0,
+        "calls_cancelled": 0
+      },
+      "tool_log_given": false
+    }
+  ]
+}
