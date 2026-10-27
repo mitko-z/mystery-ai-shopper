@@ -213,7 +213,7 @@ uv run python -m evaluator judge evaluations/shop-20261023-185334.controls.json
 uv run python -m evaluator agreement evaluations/shop-20261023-185334.controls.ground-truth.json evaluations/shop-20261023-185334.controls.judge-v1.json
 ```
 
-A judge file is never overwritten, so a repeat of the same judging needs a name of its own: `--out evaluations/shop-20261023-185334.judge-v1-run2.json`. `evaluations/shop-20261023-185334.runs-v1.md` puts the three runs of each mode side by side for the real runs and for the controls. It was made by a one-off script, not by a command.
+A judge file is never overwritten, so a repeat of the same judging needs a name of its own. The repeats are kept in `evaluations/repeats/`: `--out evaluations/repeats/shop-20261023-185334.judge-v1-run2.json`. `evaluations/shop-20261023-185334.runs-v1.md` puts the three runs of each mode side by side for the real runs and for the controls. It was made by a one-off script, not by a command.
 
 ## Tests
 
