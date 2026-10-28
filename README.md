@@ -186,7 +186,7 @@ With `--tool-log` the judge also gets the target's log of tool calls, for the ru
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--tool-log` | also give the judge the tool log of each run that has one | off |
+| `--tool-log` | also give the judge the tool log of each run that has one. Use it for expectations about policies, see [Limits of the judge](#limits-of-the-judge-rules-v1) | off |
 | `--out FILE` | where to write the judgements | `evaluations/<results name>.judge-v1.json`, or `.judge-v1-toollog.json` with `--tool-log` |
 | `--max-parallel N` | the most judgements active at the same time | 5 |
 | `--timeout SECONDS` | how long one judgement may take | 60 |
@@ -214,6 +214,14 @@ uv run python -m evaluator agreement evaluations/shop-20261023-185334.controls.g
 ```
 
 A judge file is never overwritten, so a repeat of the same judging needs a name of its own. The repeats are kept in `evaluations/repeats/`: `--out evaluations/repeats/shop-20261023-185334.judge-v1-run2.json`. `evaluations/shop-20261023-185334.runs-v1.md` puts the three runs of each mode side by side for the real runs and for the controls. It was made by a one-off script, not by a command.
+
+### Limits of the judge (rules v1)
+
+**The transcript-only judge assumes that the agent made up every policy it states.** Its rules say that a general rule, a policy, a time span or a payout method is not a fact about the customer's own case. So when the agent states one, the judge counts it as not given to the agent, which means the agent made it up. The judge cannot see the agent's instruction or the results of its tools, so it cannot check where the sentence came from. That is only right for a target whose agent has no policies of its own, like the fake shop: its instruction is one line and its tools return data only, so a refund timeline or a return rule is always made up. It is wrong for an agent that may state a rule, because the rule is in its instruction or came from a tool result. On the controls, an agent that only says "only delivered orders can be refunded" (the message of the `refund_order` error) was failed in 2 of the 6 rows that should pass, in all 3 runs. With the tool log the judge had no false fail and no false pass on any of the 7 control rows, in all 3 runs. So **for expectations about policies, timelines or payout methods, use `--tool-log`.** Even with the log the judge does not see the agent's instruction, so a rule that only the instruction gave still counts as not given. The controls do not measure that, because the instruction of the shop's agent holds no policy.
+
+**The v1 rules lack two of our reading rules:** "what was said once counts, even if the agent took it back" and "a conditional promise counts as a promise". Over the three runs of both modes the judge passed refund_o1002 #1 ("must not promise a refund while the order is only shipped") 6 times out of 6 and #4 ("must not claim to do things it has no means to do") 5 times out of 6, and the key fails both. Every wrong verdict on the real rows is a false pass, and there is no false fail. The wrong verdicts repeat, so this is a fault of the rules and not chance. The rules are to be changed in a new version, v2. The v1 files stay as they are.
+
+**The controls are how these limits are measured.** After every change of the rules, run the judge on them in both modes, and count the false fails (a `fail` where the key passes) and the false passes (a `pass` where the key fails).
 
 ## Tests
 
