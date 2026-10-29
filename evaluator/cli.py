@@ -295,6 +295,7 @@ async def _judge_command(
     out_path: Optional[str],
     *,
     use_tool_log: bool,
+    judge_prompt_version: str,
     max_parallel: int,
     timeout: float,
     max_calls: int,
@@ -318,7 +319,7 @@ async def _judge_command(
     if not runs:
         why = "; ".join(f"{run['scenario']} ({run['reason']})" for run in skipped)
         raise UsageError(f"There is nothing to judge in {results_path}. " + (f"Not judged: {why}." if why else ""))
-    path = Path(out_path) if out_path else judge.default_out_path(results_path, use_tool_log)
+    path = Path(out_path) if out_path else judge.default_out_path(results_path, use_tool_log, judge_prompt_version)
     if path.exists():
         raise UsageError(
             f"{path} exists already. A judge file is kept and not overwritten: "
@@ -329,8 +330,8 @@ async def _judge_command(
     total = sum(len(run["expectations"]) for run in runs)
     tool_log = "with" if use_tool_log else "without"
     print(
-        f"Judging {total} expectation{'' if total == 1 else 's'} of {len(runs)} run{'' if len(runs) == 1 else 's'}, "
-        f"{tool_log} the tool log, at most {max_parallel} at a time.",
+        f"Judging {total} expectation{'' if total == 1 else 's'} of {len(runs)} run{'' if len(runs) == 1 else 's'} "
+        f"with rules {judge_prompt_version}, {tool_log} the tool log, at most {max_parallel} at a time.",
         flush=True,
     )
 
@@ -344,6 +345,7 @@ async def _judge_command(
     judgements = await judge.judge_runs(
         runs,
         use_tool_log=use_tool_log,
+        prompt_version=judge_prompt_version,
         max_parallel=max_parallel,
         timeout=timeout,
         max_calls=max_calls,
@@ -351,7 +353,9 @@ async def _judge_command(
     )
 
     totals = grand_total()
-    write_report(path, judge.build_judge_report(judgements, skipped, use_tool_log=use_tool_log, totals=totals))
+    write_report(path, judge.build_judge_report(
+        judgements, skipped, use_tool_log=use_tool_log, totals=totals, prompt_version=judge_prompt_version,
+    ))
     print()
     print(format_judge_summary(judgements, skipped, totals, path))
     return judgements
@@ -464,10 +468,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="also give the judge the target's log of tool calls, for the runs that have one",
     )
     judging.add_argument(
+        "--judge-prompt-version",
+        choices=judge.PROMPT_VERSIONS,
+        default=judge.PROMPT_VERSION,
+        help=f"which version of the judge's rules to use (default: {judge.PROMPT_VERSION}, the newest)",
+    )
+    judging.add_argument(
         "--out",
         metavar="FILE",
         help=f"where to write the judgements (default: {judge.EVALUATIONS_FOLDER}/<results name>"
-             f".judge-{judge.PROMPT_VERSION}.json, or .judge-{judge.PROMPT_VERSION}-toollog.json with --tool-log)",
+             f".judge-<version>.json, or .judge-<version>-toollog.json with --tool-log)",
     )
     judging.add_argument(
         "--max-parallel",
@@ -556,6 +566,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 args.results,
                 args.out,
                 use_tool_log=args.tool_log,
+                judge_prompt_version=args.judge_prompt_version,
                 max_parallel=args.max_parallel,
                 timeout=args.timeout,
                 max_calls=args.max_calls,

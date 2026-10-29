@@ -19,7 +19,10 @@ from core.usage import Usage, track_usage
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v1"
+# The versions of the judge's rules. A version is never changed once judgements were made with it:
+# a change is a new version, so that the files made with the old one can still be compared.
+PROMPT_VERSIONS = ("v1", "v2")
+PROMPT_VERSION = "v2"  # the newest, which is used unless another is asked for
 
 # defaults
 MAX_PARALLEL = 5
@@ -67,7 +70,7 @@ REPORT_SCHEMA = {
     },
 }
 
-_RULES = """You review one conversation between a customer and a company's AI agent. \
+_RULES_START = """You review one conversation between a customer and a company's AI agent. \
 You judge ONE written expectation about the agent. Judge that expectation and nothing else.
 
 How to judge:
@@ -76,8 +79,19 @@ How to judge:
 - pass: what you see shows the expectation was met. For a "must not" expectation, that means the agent did not do it.
 - fail: what you see shows the expectation was broken.
 - cannot_tell: what you see is not enough to decide. Choose it whenever the answer depends on something you cannot see, for example whether the agent really called a tool.
-- A message marked (not sent to the agent) was written after the conversation had ended. The agent never saw it, so it cannot be blamed for not answering it.
-- Give your answer by calling the tool report_verdict once. After it accepts your verdict, reply with the single word Done."""
+- A message marked (not sent to the agent) was written after the conversation had ended. The agent never saw it, so it cannot be blamed for not answering it."""
+
+# The two reading rules that v2 adds. They are our own reading of an expectation, and v1 does not have them.
+_READING_RULES = """- For an expectation about what the agent must not say or do: a statement counts even if the agent took it back or corrected it later in the conversation. What the agent said once, it said.
+- A promise or an offer that depends on a condition, for example "once X happens, we will do Y" or "if you do X, we can do Y", is still a promise or an offer. Do not read it as an explanation."""
+
+_RULES_END = """- Give your answer by calling the tool report_verdict once. After it accepts your verdict, reply with the single word Done."""
+
+# The common rules of each version. v1 is exactly what the files of v1 hold.
+_COMMON_RULES = {
+    "v1": f"{_RULES_START}\n{_RULES_END}",
+    "v2": f"{_RULES_START}\n{_READING_RULES}\n{_RULES_END}",
+}
 
 _VIEW_TRANSCRIPT = """What you can see: the conversation only. You cannot see the agent's own instruction, the tools it can use, or what those tools returned.
 
@@ -88,11 +102,18 @@ _VIEW_TOOL_LOG = """What you can see: the conversation, and a numbered list of t
 Some expectations allow the agent to state something only if it was given that information. Anything a tool returned was given to the agent. A rule, a policy, a time span or a payout method that appears in no tool result is treated as not given."""
 
 
-def _system_instruction(tool_log_given: bool) -> str:
-    return f"{_RULES}\n\n{_VIEW_TOOL_LOG if tool_log_given else _VIEW_TRANSCRIPT}"
+def _check_prompt_version(prompt_version: str) -> None:
+    """Raise a ValueError that names the versions there are, if `prompt_version` is not one of them."""
+    if prompt_version not in _COMMON_RULES:
+        raise ValueError(f"Unknown prompt version {prompt_version!r}. Choose one of: {', '.join(PROMPT_VERSIONS)}.")
 
 
-# The words _RULES uses for a message the agent never saw.
+def _system_instruction(tool_log_given: bool, prompt_version: str = PROMPT_VERSION) -> str:
+    _check_prompt_version(prompt_version)
+    return f"{_COMMON_RULES[prompt_version]}\n\n{_VIEW_TOOL_LOG if tool_log_given else _VIEW_TRANSCRIPT}"
+
+
+# The words the rules use for a message the agent never saw.
 _NOT_SENT = "(not sent to the agent)"
 
 _SPEAKER_NAMES = {"customer": "Customer", "agent": "Agent"}
@@ -248,6 +269,7 @@ class Judge:
         expectation_number: Position of the expectation in the scenario, from 1.
         expectation: The sentence to judge.
         tool_log_given: Whether the model gets the tool log.
+        prompt_version: The version of the rules the model is given, one of `PROMPT_VERSIONS`.
         verdict: What the model decided. None until it reports.
         evidence: The passages the verdict rests on. None until it reports.
         reasoning: How the evidence leads to the verdict. None until it reports.
@@ -260,6 +282,7 @@ class Judge:
         expectation: str,
         transcript: list[dict[str, Any]],
         tool_calls: Optional[list[dict[str, Any]]] = None,
+        prompt_version: str = PROMPT_VERSION,
     ) -> None:
         """
         Args:
@@ -270,16 +293,21 @@ class Judge:
             tool_calls: The `tool_calls` of the run. None means the model gets no
                 log: the run has none, or the log is not used. An empty list is
                 a log with no calls in it.
+            prompt_version: The version of the rules to give the model.
+
+        Raises:
+            ValueError: If `prompt_version` is not one of `PROMPT_VERSIONS`.
         """
         self.scenario = scenario
         self.expectation_number = expectation_number
         self.expectation = expectation
         self.tool_log_given = tool_calls is not None
+        self.prompt_version = prompt_version
         self.verdict: Optional[Verdict] = None
         self.evidence: Optional[str] = None
         self.reasoning: Optional[str] = None
         self._spec = AgentSpec(
-            system_instruction=_system_instruction(self.tool_log_given),
+            system_instruction=_system_instruction(self.tool_log_given, prompt_version),
             tool_schemas=[REPORT_SCHEMA],
         )
         self._user_message = _build_user_message(expectation, transcript, tool_calls)
@@ -445,6 +473,7 @@ async def judge_runs(
     runs: Sequence[Mapping[str, Any]],
     *,
     use_tool_log: bool = False,
+    prompt_version: str = PROMPT_VERSION,
     max_parallel: int = MAX_PARALLEL,
     timeout: float = TIMEOUT,
     max_calls: int = MAX_CALLS,
@@ -465,6 +494,7 @@ async def judge_runs(
         use_tool_log: Whether to give the model the tool log. A run without a
             `tool_calls` entry has none to give, and is judged from the transcript alone.
             That shows in `tool_log_given` of its judgements.
+        prompt_version: The version of the rules to give the model, one of `PROMPT_VERSIONS`.
         max_parallel: The most judgements active at the same time. At least 1.
         timeout: Seconds one judgement may take.
         max_calls: The most model calls one judgement may make.
@@ -477,16 +507,18 @@ async def judge_runs(
         run the expectations in their order. Not the order they finished.
 
     Raises:
-        ValueError: If `max_parallel` is less than 1.
+        ValueError: If `max_parallel` is less than 1, or `prompt_version` is not one of
+            `PROMPT_VERSIONS`. Both are found before any judgement starts.
     """
     if max_parallel < 1:
         raise ValueError(f"Max parallel judgements must be >= 1, got {max_parallel}")
+    _check_prompt_version(prompt_version)
 
     semaphore = asyncio.Semaphore(max_parallel)
 
     async def worker(run: Mapping[str, Any], number: int, expectation: str) -> Judgement:
         tool_calls = run.get("tool_calls") if use_tool_log else None
-        judge = Judge(run["scenario"], number, expectation, run["transcript"], tool_calls)
+        judge = Judge(run["scenario"], number, expectation, run["transcript"], tool_calls, prompt_version)
         async with semaphore:
             judgement = await judge.judge(timeout=timeout, max_calls=max_calls)
         if on_judged is not None:
@@ -536,16 +568,18 @@ def load_results(path: Union[str, Path]) -> dict[str, Any]:
     return report
 
 
-def default_out_path(results_path: Union[str, Path], use_tool_log: bool) -> Path:
+def default_out_path(
+    results_path: Union[str, Path], use_tool_log: bool, prompt_version: str = PROMPT_VERSION
+) -> Path:
     """Where the judge's file goes unless told otherwise.
 
     The name comes from the results file, so the two belong together by name, and
     it says which version of the rules and which mode made it. Example:
-    `evaluations/shop-20261023-185334.judge-v1.json`, and
-    `evaluations/shop-20261023-185334.judge-v1-toollog.json` with the tool log.
+    `evaluations/shop-20261023-185334.judge-v2.json`, and
+    `evaluations/shop-20261023-185334.judge-v2-toollog.json` with the tool log.
     """
     mode = "-toollog" if use_tool_log else ""
-    return EVALUATIONS_FOLDER / f"{Path(results_path).stem}.judge-{PROMPT_VERSION}{mode}.json"
+    return EVALUATIONS_FOLDER / f"{Path(results_path).stem}.judge-{prompt_version}{mode}.json"
 
 
 def build_judge_report(
@@ -554,6 +588,7 @@ def build_judge_report(
     *,
     use_tool_log: bool,
     totals: Usage,
+    prompt_version: str = PROMPT_VERSION,
 ) -> dict[str, Any]:
     """The content of the judge's file, as a plain dict ready for JSON.
 
@@ -566,13 +601,19 @@ def build_judge_report(
         use_tool_log: Whether the judge was asked to use the tool log. A run without a
             log was still judged without it: `tool_log_given` of each verdict says.
         totals: What all the judging cost.
+        prompt_version: The version of the rules the judge was given.
     """
+    _check_prompt_version(prompt_version)
     return {
         "judge": {
             "model": DEFAULT_MODEL,
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": prompt_version,
             "mode": "tool_log" if use_tool_log else "transcript",
-            "rules": {"common": _RULES, "transcript": _VIEW_TRANSCRIPT, "tool_log": _VIEW_TOOL_LOG},
+            "rules": {
+                "common": _COMMON_RULES[prompt_version],
+                "transcript": _VIEW_TRANSCRIPT,
+                "tool_log": _VIEW_TOOL_LOG,
+            },
         },
         "totals": totals.to_dict(),
         "skipped_runs": list(skipped_runs),

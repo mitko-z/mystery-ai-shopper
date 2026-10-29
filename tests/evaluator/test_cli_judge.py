@@ -58,7 +58,7 @@ def test_every_judgement_prints_a_line_and_a_summary_closes_it(monkeypatch, caps
 
     lines = capsys.readouterr().out.splitlines()
     assert code == 0
-    assert lines[0] == "Judging 3 expectations of 2 runs, without the tool log, at most 5 at a time."
+    assert lines[0] == "Judging 3 expectations of 2 runs with rules v2, without the tool log, at most 5 at a time."
     assert sorted(line[:7] for line in lines[1:4]) == ["[1/3] a", "[2/3] a", "[3/3] b"]
     assert sorted(line[6:] for line in lines[1:4]) == ["a #1: pass", "a #2: fail", "b #1: pass"]
     assert lines[4] == ""
@@ -99,7 +99,9 @@ def test_one_expectation_in_one_run_is_named_in_the_singular(monkeypatch, capsys
 
     run_judge(tmp_path, make_run("a"))
 
-    assert capsys.readouterr().out.splitlines()[0] == "Judging 1 expectation of 1 run, without the tool log, at most 5 at a time."
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "Judging 1 expectation of 1 run with rules v2, without the tool log, at most 5 at a time."
+    )
 
 
 # --- the tool log ---
@@ -125,11 +127,46 @@ def test_the_tool_log_goes_to_the_judge_only_when_asked_for(monkeypatch, capsys,
     assert "with the tool log" in capsys.readouterr().out
 
 
+# --- the version of the rules ---
+
+def test_the_newest_rules_are_used_unless_another_version_is_asked_for(monkeypatch, capsys, tmp_path):
+    fake = JudgingInteractions()
+    use_fake(monkeypatch, fake)
+    code, out = run_judge(tmp_path, make_run("a"))
+    newest = json.loads(out.read_text(encoding="utf-8"))["judge"]
+
+    out.unlink()
+    fake = JudgingInteractions()
+    use_fake(monkeypatch, fake)
+    code_v1, _ = run_judge(tmp_path, make_run("a"), options=["--judge-prompt-version", "v1"])
+    older = json.loads(out.read_text(encoding="utf-8"))["judge"]
+
+    assert code == code_v1 == 0
+    assert (newest["prompt_version"], older["prompt_version"]) == ("v2", "v1")
+    assert newest["rules"]["common"] == judge._COMMON_RULES["v2"]
+    assert older["rules"]["common"] == judge._COMMON_RULES["v1"]
+    assert fake.calls[0]["system_instruction"] == judge._system_instruction(False, "v1")
+    assert "with rules v1" in capsys.readouterr().out
+
+
+def test_a_version_that_does_not_exist_is_refused_before_anything_is_read(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["judge", "results.json", "--judge-prompt-version", "v9"])
+
+    assert exit_info.value.code == 2
+    assert "invalid choice: 'v9'" in capsys.readouterr().err
+
+
 # --- where the file goes ---
 
 @pytest.mark.parametrize(
     "options, name",
-    [([], "shop-20261023-185334.judge-v1.json"), (["--tool-log"], "shop-20261023-185334.judge-v1-toollog.json")],
+    [
+        ([], "shop-20261023-185334.judge-v2.json"),
+        (["--tool-log"], "shop-20261023-185334.judge-v2-toollog.json"),
+        (["--judge-prompt-version", "v1"], "shop-20261023-185334.judge-v1.json"),
+        (["--judge-prompt-version", "v1", "--tool-log"], "shop-20261023-185334.judge-v1-toollog.json"),
+    ],
 )
 def test_without_an_out_option_the_file_goes_to_the_evaluations_folder_named_after_the_results(
     monkeypatch, capsys, tmp_path, options, name
@@ -293,12 +330,13 @@ def test_the_limits_have_defaults_and_can_be_changed(monkeypatch, tmp_path):
 
     cli.main(["judge", str(results), "--out", str(tmp_path / "one.json")])
     cli.main(["judge", str(results), "--out", str(tmp_path / "two.json"),
-              "--max-parallel", "3", "--timeout", "7.5", "--max-calls", "4", "--tool-log"])
+              "--max-parallel", "3", "--timeout", "7.5", "--max-calls", "4", "--tool-log", "--judge-prompt-version", "v1"])
 
-    assert (seen[0]["max_parallel"], seen[0]["timeout"], seen[0]["max_calls"], seen[0]["use_tool_log"]) == (
-        judge.MAX_PARALLEL, judge.TIMEOUT, judge.MAX_CALLS, False
+    options = ("max_parallel", "timeout", "max_calls", "use_tool_log", "prompt_version")
+    assert tuple(seen[0][name] for name in options) == (
+        judge.MAX_PARALLEL, judge.TIMEOUT, judge.MAX_CALLS, False, judge.PROMPT_VERSION
     )
-    assert (seen[1]["max_parallel"], seen[1]["timeout"], seen[1]["max_calls"], seen[1]["use_tool_log"]) == (3, 7.5, 4, True)
+    assert tuple(seen[1][name] for name in options) == (3, 7.5, 4, True, "v1")
     assert (judge.MAX_PARALLEL, judge.TIMEOUT, judge.MAX_CALLS) == (5, 60, 6)
 
 

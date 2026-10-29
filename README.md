@@ -186,8 +186,9 @@ With `--tool-log` the judge also gets the target's log of tool calls, for the ru
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--tool-log` | also give the judge the tool log of each run that has one. Use it for expectations about policies, see [Limits of the judge](#limits-of-the-judge-rules-v1) | off |
-| `--out FILE` | where to write the judgements | `evaluations/<results name>.judge-v1.json`, or `.judge-v1-toollog.json` with `--tool-log` |
+| `--tool-log` | also give the judge the tool log of each run that has one. Use it for expectations about policies, see [Limits of the judge](#limits-of-the-judge-rules-v1-and-v2) | off |
+| `--judge-prompt-version V` | which version of the judge's rules to use: `v1`, or `v2`, which adds the two reading rules. An old version is kept so that new judgements can be compared with the files made with it | the newest, `v2` |
+| `--out FILE` | where to write the judgements | `evaluations/<results name>.judge-<version>.json`, or `.judge-<version>-toollog.json` with `--tool-log` |
 | `--max-parallel N` | the most judgements active at the same time | 5 |
 | `--timeout SECONDS` | how long one judgement may take | 60 |
 | `--max-calls N` | the most model calls one judgement may make | 6 |

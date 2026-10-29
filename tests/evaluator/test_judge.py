@@ -52,8 +52,8 @@ TOOL_CALLS = [
 NOT_SENT = "(not sent to the agent)"
 
 
-def make_judge(tool_calls=None, expectation=EXPECTATION, transcript=TRANSCRIPT):
-    return Judge("refund_o1002", 1, expectation, transcript, tool_calls)
+def make_judge(tool_calls=None, expectation=EXPECTATION, transcript=TRANSCRIPT, **options):
+    return Judge("refund_o1002", 1, expectation, transcript, tool_calls, **options)
 
 
 def make_run(name="refund", expectations=("The agent must be polite.",), tool_calls=None, **extra):
@@ -99,7 +99,7 @@ def test_a_transcript_that_ends_with_the_agent_has_nothing_marked():
 def test_the_rules_use_the_same_words_as_the_mark():
     """If the two drift apart, the model is told about a mark it never sees."""
     assert judge_module._NOT_SENT == NOT_SENT
-    assert NOT_SENT in judge_module._RULES
+    assert all(NOT_SENT in rules for rules in judge_module._COMMON_RULES.values())
 
 
 def test_an_empty_conversation_is_said_in_words():
@@ -138,13 +138,49 @@ def test_a_log_is_added_when_given_also_when_it_is_empty():
     assert empty.endswith("Tool calls the agent made:\n(none: the agent called no tools)")
 
 
-def test_the_rules_describe_only_what_the_model_can_see():
-    without_log = judge_module._system_instruction(False)
-    with_log = judge_module._system_instruction(True)
+@pytest.mark.parametrize("version", judge_module.PROMPT_VERSIONS)
+def test_the_rules_describe_only_what_the_model_can_see(version):
+    without_log = judge_module._system_instruction(False, version)
+    with_log = judge_module._system_instruction(True, version)
 
     assert "the conversation only" in without_log and "numbered list of the tool calls" not in without_log
     assert "numbered list of the tool calls" in with_log and "the conversation only" not in with_log
-    assert judge_module._RULES in without_log and judge_module._RULES in with_log
+    common = judge_module._COMMON_RULES[version]
+    assert common in without_log and common in with_log
+
+
+# --- the versions of the rules ---
+
+def test_v2_is_v1_and_the_two_reading_rules_and_nothing_else():
+    v1, v2 = judge_module._COMMON_RULES["v1"], judge_module._COMMON_RULES["v2"]
+    reading_rules = judge_module._READING_RULES
+
+    assert reading_rules in v2 and reading_rules not in v1
+    assert reading_rules.count("\n- ") == 1  # two bullets: took it back, and the condition
+    assert v2.replace(f"{reading_rules}\n", "") == v1
+
+
+def test_the_reading_rules_are_general_and_name_none_of_the_cases_they_came_from():
+    """They came from two rows about a refund and a tracking status. A rule that names them proves nothing on other rows."""
+    text = judge_module._READING_RULES.lower()
+
+    for word in ("refund", "order", "o1002", "shipped", "carrier", "tracking", "monitor", "delivered", "shop"):
+        assert word not in text
+
+
+def test_the_newest_version_is_the_default_and_the_last_one():
+    assert judge_module.PROMPT_VERSION == judge_module.PROMPT_VERSIONS[-1] == "v2"
+    assert judge_module._system_instruction(False) == judge_module._system_instruction(False, "v2")
+    assert set(judge_module._COMMON_RULES) == set(judge_module.PROMPT_VERSIONS)
+
+
+def test_an_unknown_version_is_refused_with_the_versions_there_are():
+    with pytest.raises(ValueError, match=r"Unknown prompt version 'v9'. Choose one of: v1, v2."):
+        judge_module._system_instruction(False, "v9")
+    with pytest.raises(ValueError, match="Unknown prompt version"):
+        make_judge(prompt_version="v9")
+    with pytest.raises(ValueError, match="Unknown prompt version"):
+        build_judge_report([], [], use_tool_log=False, totals=Usage(), prompt_version="v9")
 
 
 def test_the_tool_offers_exactly_three_verdicts():
@@ -166,6 +202,27 @@ async def test_the_model_is_given_the_rules_the_tool_and_the_conversation(monkey
     assert sent["system_instruction"] == judge_module._system_instruction(False)
     assert sent["tools"] == [REPORT_SCHEMA]
     assert sent["input"] == [user_step(judge_module._build_user_message(EXPECTATION, TRANSCRIPT))]
+
+
+@pytest.mark.parametrize("version", judge_module.PROMPT_VERSIONS)
+async def test_the_model_is_given_the_rules_of_the_version_asked_for(monkeypatch, version):
+    fake = ScriptedInteractions([report_step()], [reply_step("Done.")])
+    use_fake(monkeypatch, fake)
+
+    await make_judge(prompt_version=version).judge()
+
+    sent = fake.calls[0]["system_instruction"]
+    assert sent == judge_module._system_instruction(False, version)
+    assert (judge_module._READING_RULES in sent) is (version == "v2")
+
+
+async def test_the_model_is_given_the_newest_rules_unless_another_version_is_asked_for(monkeypatch):
+    fake = ScriptedInteractions([report_step()], [reply_step("Done.")])
+    use_fake(monkeypatch, fake)
+
+    await make_judge().judge()
+
+    assert judge_module._READING_RULES in fake.calls[0]["system_instruction"]
 
 
 async def test_the_verdict_comes_back_with_its_evidence_reasoning_and_cost(monkeypatch):
@@ -456,6 +513,29 @@ async def test_the_tool_log_goes_only_to_the_runs_that_have_one_and_only_when_as
     assert [("Tool calls the agent made" in m) for m in fake.messages] == [True, False]
 
 
+async def test_every_judgement_of_a_batch_gets_the_rules_of_the_version_asked_for(monkeypatch):
+    runs = [make_run("a", ["one", "two"]), make_run("b", ["three"])]
+
+    for version in judge_module.PROMPT_VERSIONS:
+        fake = JudgingInteractions()
+        use_fake(monkeypatch, fake)
+        await judge_runs(runs, prompt_version=version)
+        expected = judge_module._system_instruction(False, version)
+        assert [call["system_instruction"] for call in fake.calls] == [expected] * 6  # two calls for each of 3
+
+
+async def test_an_unknown_version_stops_the_batch_before_any_model_call(monkeypatch):
+    fake = JudgingInteractions()
+    use_fake(monkeypatch, fake)
+
+    with pytest.raises(ValueError, match="Unknown prompt version 'v9'"):
+        await judge_runs([make_run()], prompt_version="v9")
+    with pytest.raises(ValueError, match="Unknown prompt version 'v9'"):
+        await judge_runs([], prompt_version="v9")  # no Judge is made here, so only the early check can refuse it
+
+    assert fake.calls == []
+
+
 async def test_the_judge_is_given_nothing_but_the_expectation_the_conversation_and_the_log_if_asked(monkeypatch):
     """The persona, the goal, the customer's own verdict and the other expectations would give the answer away."""
     secret = {
@@ -547,9 +627,12 @@ def test_a_results_file_that_cannot_be_read_is_one_clear_message(tmp_path):
 
 def test_the_judge_file_is_named_after_the_results_file_the_version_and_the_mode():
     assert default_out_path("results/shop-20261023-185334.json", False).as_posix() == (
-        "evaluations/shop-20261023-185334.judge-v1.json"
+        "evaluations/shop-20261023-185334.judge-v2.json"
     )
     assert default_out_path("results/shop-20261023-185334.json", True).as_posix() == (
+        "evaluations/shop-20261023-185334.judge-v2-toollog.json"
+    )
+    assert default_out_path("results/shop-20261023-185334.json", True, "v1").as_posix() == (
         "evaluations/shop-20261023-185334.judge-v1-toollog.json"
     )
 
@@ -564,7 +647,7 @@ def test_the_judge_file_records_what_the_judge_was_told_and_what_it_cost():
     assert report["judge"]["prompt_version"] == judge_module.PROMPT_VERSION
     assert report["judge"]["mode"] == "tool_log"
     assert report["judge"]["rules"] == {
-        "common": judge_module._RULES,
+        "common": judge_module._COMMON_RULES["v2"],
         "transcript": judge_module._VIEW_TRANSCRIPT,
         "tool_log": judge_module._VIEW_TOOL_LOG,
     }
@@ -572,6 +655,17 @@ def test_the_judge_file_records_what_the_judge_was_told_and_what_it_cost():
     assert report["skipped_runs"] == skipped
     assert report["verdicts"] == [judgements[0].to_dict()]
     json.dumps(report)
+
+
+def test_the_judge_file_holds_the_rules_of_the_version_it_was_made_with():
+    """So that a v1 file and a v2 file can be told apart by what they say the judge was told."""
+    v1 = build_judge_report([], [], use_tool_log=False, totals=Usage(), prompt_version="v1")
+    v2 = build_judge_report([], [], use_tool_log=False, totals=Usage(), prompt_version="v2")
+
+    assert (v1["judge"]["prompt_version"], v2["judge"]["prompt_version"]) == ("v1", "v2")
+    assert v1["judge"]["rules"]["common"] == judge_module._COMMON_RULES["v1"]
+    assert v2["judge"]["rules"]["common"] == judge_module._COMMON_RULES["v2"]
+    assert v1["judge"]["rules"]["common"] != v2["judge"]["rules"]["common"]
 
 
 def test_the_mode_in_the_judge_file_is_transcript_unless_the_log_was_asked_for():

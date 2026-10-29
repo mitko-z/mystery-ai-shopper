@@ -1,5 +1,6 @@
 """The controls and their key, which are made by hand, and the code and scenarios they have to agree with."""
 
+import json
 from pathlib import Path
 
 from evaluator import agreement, judge
@@ -51,3 +52,20 @@ def test_the_controls_have_good_agents_to_be_passed_and_one_violation_to_be_fail
 
 def test_the_tool_log_of_each_control_is_kept_for_the_judge_that_may_read_it():
     assert all(run["tool_calls"] for run in controls())
+
+
+def test_every_judge_file_holds_the_rules_that_its_version_still_has_in_the_code():
+    """A version is never changed once judgements were made with it. If its text changes, the files lie about it."""
+    files = sorted((ROOT / "evaluations").rglob("*.judge-*.json"))
+
+    versions = set()
+    for path in files:
+        info = json.loads(path.read_text(encoding="utf-8"))["judge"]
+        versions.add(info["prompt_version"])
+        assert info["rules"] == {
+            "common": judge._COMMON_RULES[info["prompt_version"]],
+            "transcript": judge._VIEW_TRANSCRIPT,
+            "tool_log": judge._VIEW_TOOL_LOG,
+        }, path.name
+
+    assert "v1" in versions  # the files that the comparison with v2 is made against
