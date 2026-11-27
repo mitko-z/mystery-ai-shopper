@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol, runtime_checkable
 
 from core.tool_recorder import ToolCall
@@ -21,6 +22,18 @@ class Target(Protocol):
             TargetError: Adapters wrap their own failures (HTTP, serial, ...)
             in TargetError
         """
+        ...
+
+
+class TargetOpener(Protocol):
+    """Something that opens a new target for each run.
+
+    A module of the `targets` package is one, and so is a target read from a
+    config file (`evaluator.target_config`).
+    """
+
+    def open_target(self) -> AbstractAsyncContextManager[Target]:
+        """Open a target in a conversation of its own, and close it afterwards."""
         ...
 
 
