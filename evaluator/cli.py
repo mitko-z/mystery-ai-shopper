@@ -1,7 +1,9 @@
 """The command line of the evaluator.
 
     uv run python -m evaluator single <target> <scenario>
+    uv run python -m evaluator single --target-config FILE --scenario-file FILE <scenario>
     uv run python -m evaluator parallel <target>
+    uv run python -m evaluator parallel --target-config FILE --scenario-file FILE
     uv run python -m evaluator judge <results file>
     uv run python -m evaluator agreement <key file> <judge file>
 
@@ -13,7 +15,10 @@ puts the judge's verdicts beside our own, in a table.
 
 `<target>` is a module in the `targets` package, e.g. `shop`. It provides
 `open_target()`, an async context manager that yields a `Target`, and
-`SCENARIOS`, a dict of scenarios by name.
+`SCENARIOS`, a dict of scenarios by name. Instead of a module, `--target-config`
+names a TOML file that describes an HTTP chat endpoint (see
+`evaluator.target_config`). Such a file holds no scenarios, so they come from
+`--scenario-file`.
 """
 
 import argparse
@@ -23,7 +28,8 @@ import pkgutil
 import sys
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
@@ -52,7 +58,8 @@ from evaluator.runner import (
 )
 from evaluator.scenario import Scenario
 from evaluator.scenario_file import ScenarioFileError, load_scenario_files
-from evaluator.target import TargetError
+from evaluator.target import TargetError, TargetOpener
+from evaluator.target_config import TargetConfigError, load_target_config
 
 TARGETS_PACKAGE = "targets"
 DEFAULT_MAX_PARALLEL = 5
@@ -183,31 +190,82 @@ def load_target(name: str) -> ModuleType:
         raise UsageError(f"Unknown target {name!r}. Available: {available}.") from e
 
 
-def get_scenario(target_module: ModuleType, name: str) -> Scenario:
-    """Look up scenario `name` in a target module.
+@dataclass(frozen=True)
+class ChosenTarget:
+    """The target that the command line names, and the scenarios to play on it.
+
+    Attributes:
+        name: The target's name in the results, e.g. `shop`.
+        opener: What opens a new target for each run.
+        scenarios: The scenarios by name.
+        config_path: The target config file, or None for a module of the `targets` package.
+    """
+
+    name: str
+    opener: TargetOpener
+    scenarios: Mapping[str, Scenario]
+    config_path: Optional[str] = None
+
+
+def choose_target(
+    target_name: Optional[str], config_path: Optional[str], scenario_files: Optional[list[str]]
+) -> ChosenTarget:
+    """Load the target of a `single` or `parallel` command, and its scenarios.
+
+    Args:
+        target_name: A module of the `targets` package, or None if `config_path` is given.
+        config_path: A target config file, or None if `target_name` is given.
+        scenario_files: Where the scenarios are. For a module they may be left
+            out, and then the module's own are played.
+
+    Raises:
+        UsageError: If the module does not exist.
+        TargetConfigError: If the target config is wrong, or the secret it names
+            is not set. Both are found before any run starts.
+        ScenarioFileError: If a scenario file is wrong.
+    """
+    if config_path is not None:
+        target_config = load_target_config(config_path)
+        target_config.check_secret()
+        return ChosenTarget(
+            target_config.name, target_config, load_scenario_files(scenario_files or []), config_path
+        )
+    target_module = load_target(target_name)
+    scenarios = load_scenario_files(scenario_files) if scenario_files else target_module.SCENARIOS
+    return ChosenTarget(target_name, target_module, scenarios)
+
+
+def get_scenario(scenarios: Mapping[str, Scenario], name: str) -> Scenario:
+    """Look up scenario `name`.
 
     Raises:
         UsageError: If there is no such scenario; the message lists the ones there are.
     """
-    scenarios = target_module.SCENARIOS
     if name not in scenarios:
         raise UsageError(f"Unknown scenario {name!r}. Available: {', '.join(sorted(scenarios))}.")
     return scenarios[name]
 
 
-async def _single_command(target_name: str, scenario_name: str, max_calls: int) -> None:
+async def _single_command(
+    target_name: Optional[str],
+    config_path: Optional[str],
+    scenario_files: Optional[list[str]],
+    scenario_name: str,
+    max_calls: int,
+) -> None:
     """The `single` command: run one scenario and print the conversation as it happens.
 
-    The outcome, if the run reached one, and what the run cost are printed at the
-    end, also when the run fails.
+    The target is a module or a target config (see `choose_target`). The outcome,
+    if the run reached one, and what the run cost are printed at the end, also
+    when the run fails.
     """
-    target_module = load_target(target_name)
-    scenario = get_scenario(target_module, scenario_name)
+    chosen = choose_target(target_name, config_path, scenario_files)
+    scenario = get_scenario(chosen.scenarios, scenario_name)
     print(format_header(scenario))
     transcript = Transcript()
     with track_usage(max_calls) as usage:
         try:
-            async with target_module.open_target() as target:
+            async with chosen.opener.open_target() as target:
                 await run_scenario(target, scenario, transcript, on_message=lambda m: print(format_message(m)))
         finally:
             print()
@@ -217,7 +275,8 @@ async def _single_command(target_name: str, scenario_name: str, max_calls: int) 
 
 
 async def _parallel_command(
-    target_name: str,
+    target_name: Optional[str],
+    config_path: Optional[str],
     scenario_files: Optional[list[str]],
     *,
     max_parallel: int,
@@ -227,8 +286,9 @@ async def _parallel_command(
 ) -> list[RunResult]:
     """The `parallel` command: run many scenarios at once, write the results file and print a summary.
 
-    A line is printed for each run as it finishes. The scenarios are those of
-    `scenario_files`, or else those of the target. A run that times out or fails
+    A line is printed for each run as it finishes. The target is a module or a
+    target config (see `choose_target`). The scenarios are those of
+    `scenario_files`, or else those of the module. A run that times out or fails
     is a result like any other: it does not stop the batch, and the file is
     written all the same.
 
@@ -237,14 +297,15 @@ async def _parallel_command(
 
     Raises:
         UsageError: If the target is unknown or has no scenarios.
+        TargetConfigError: If the target config is wrong or its secret is not set.
         ScenarioFileError: If the scenario file is wrong.
         config.MissingAPIKeyError: If the API key is not set. This is checked before
             any run starts, so a missing key is one error and not one per run.
         ResultsFileError: If the results file cannot be written.
     """
-    target_module = load_target(target_name)
-    source = load_scenario_files(scenario_files) if scenario_files else target_module.SCENARIOS
-    scenarios = list(source.values())
+    chosen = choose_target(target_name, config_path, scenario_files)
+    target_name = chosen.name
+    scenarios = list(chosen.scenarios.values())
     if not scenarios:
         raise UsageError(f"There are no scenarios to run on target {target_name!r}.")
     agent_loop.check_api_key()
@@ -263,7 +324,7 @@ async def _parallel_command(
         print(format_run_line(result, finished, len(scenarios)), flush=True)
 
     results = await run_in_parallel(
-        target_module,
+        chosen.opener,
         scenarios,
         max_parallel=max_parallel,
         default_timeout=timeout,
@@ -272,14 +333,14 @@ async def _parallel_command(
     )
 
     totals = grand_total()
+    settings = {"max_parallel": max_parallel, "default_timeout_seconds": timeout, "max_calls": max_calls}
+    if chosen.config_path is not None:
+        # The file and not its URL: a URL can hold more than it should.
+        settings["target_config"] = chosen.config_path
     report = build_report(
         target_name,
         results,
-        settings={
-            "max_parallel": max_parallel,
-            "default_timeout_seconds": timeout,
-            "max_calls": max_calls,
-        },
+        settings=settings,
         started_at=started_at,
         duration_seconds=time.perf_counter() - started,
         totals=totals,
@@ -402,7 +463,25 @@ def build_parser() -> argparse.ArgumentParser:
     modes = parser.add_subparsers(dest="mode", required=True, metavar="{single,parallel,judge,agreement}")
 
     def add_shared_arguments(mode: argparse.ArgumentParser) -> None:
-        mode.add_argument("target", help=f"name of a module in the `{TARGETS_PACKAGE}` package, e.g. shop")
+        mode.add_argument(
+            "target",
+            nargs="?",
+            help=f"name of a module in the `{TARGETS_PACKAGE}` package, e.g. shop. "
+                 "Leave it out when --target-config is given",
+        )
+        mode.add_argument(
+            "--target-config",
+            metavar="FILE",
+            help="TOML file that describes an HTTP chat endpoint, instead of a target module. "
+                 "It needs --scenario-file",
+        )
+        mode.add_argument(
+            "--scenario-file",
+            metavar="FILE",
+            action="append",
+            help="TOML file with the scenarios, instead of the target's own. "
+                 "Repeat the option to use several files.",
+        )
         mode.add_argument(
             "--max-calls",
             type=int,
@@ -427,13 +506,6 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     add_shared_arguments(parallel)
-    parallel.add_argument(
-        "--scenario-file",
-        metavar="FILE",
-        action="append",
-        help="TOML file with the scenarios to run, instead of the target's own. "
-             "Repeat the option to use several files.",
-    )
     parallel.add_argument(
         "--max-parallel",
         type=int,
@@ -533,6 +605,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.mode in ("single", "parallel"):
+        if args.target is not None and args.target_config is not None:
+            parser.error("give a target or --target-config, not both")
+        if args.target is None and args.target_config is None:
+            parser.error(
+                "a target is required: `single <target> <scenario>`, or --target-config FILE and a scenario"
+                if args.mode == "single" else
+                "a target is required: `parallel <target>`, or --target-config FILE"
+            )
+        if args.target_config is not None and not args.scenario_file:
+            parser.error("--target-config needs --scenario-file, because a target config holds no scenarios")
+
     # A limit is checked in each mode that has it.
     if hasattr(args, "max_calls") and args.max_calls < 1:
         parser.error("--max-calls must be at least 1")
@@ -547,11 +631,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         if args.mode == "single":
-            asyncio.run(_single_command(args.target, args.scenario, args.max_calls))
+            asyncio.run(_single_command(
+                args.target, args.target_config, args.scenario_file, args.scenario, args.max_calls,
+            ))
             return 0
         elif args.mode == "parallel":
             results = asyncio.run(_parallel_command(
                 args.target,
+                args.target_config,
                 args.scenario_file,
                 max_parallel=args.max_parallel,
                 timeout=args.timeout,
@@ -583,6 +670,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     except (
         UsageError,
         ScenarioFileError,
+        TargetConfigError,
         ResultsFileError,
         TargetError,
         CustomerError,

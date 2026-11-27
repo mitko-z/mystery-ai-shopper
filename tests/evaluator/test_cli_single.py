@@ -242,7 +242,7 @@ def test_main_rejects_a_call_limit_below_one(value, capsys):
 def test_main_gives_the_run_its_call_limit(extra_args, expected, monkeypatch):
     seen = {}
 
-    async def fake_run(target_name, scenario_name, max_calls):
+    async def fake_run(target_name, config_path, scenario_files, scenario_name, max_calls):
         seen["max_calls"] = max_calls
 
     monkeypatch.setattr(cli, "_single_command", fake_run)
