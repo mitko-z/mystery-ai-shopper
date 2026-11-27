@@ -1,0 +1,35 @@
+# The fake shop as a target config: the shop's HTTP API, run as a server.
+#
+# Start the server first:   uv run fastapi dev shop/app.py
+# Then:                     uv run python -m evaluator parallel --target-config target_configs/shop_local.toml --scenario-file scenarios/shop.toml
+#
+# This is the black-box view of the shop. The tester sees only the HTTP replies,
+# so the results have no `tool_calls` (unlike `parallel shop`, which runs the shop
+# in the same process and reads its log). Each run has a conversation id of its
+# own, and the server gives every new id a fresh shop, so runs do not see each other.
+#
+# The keys:
+#   name                     the target's name in the results and in the results file's name
+#   base_url                 http:// or https:// and a host, with no query and no password
+#   path                     the chat endpoint, default "/chat"
+#   request_timeout_seconds  how long one HTTP request may take, default 60
+#   [auth]                   optional: the header that carries a secret, read from an
+#                            environment variable. Plain http is allowed to localhost only.
+#                              header = "Authorization"
+#                              env = "ACME_TOKEN"
+#                              prefix = "Bearer "
+#   [headers]                optional: static headers that are not secret
+#   [request] body           the request body. "{message}" and "{conversation_id}" are
+#                            replaced, and only as a whole value. "{message}" must be there.
+#   [response] reply         where the reply text is in the JSON answer, e.g. "data.messages.0.text"
+
+name = "shop-local"
+base_url = "http://127.0.0.1:8000"
+path = "/chat"
+request_timeout_seconds = 60
+
+[request]
+body = { conversation_id = "{conversation_id}", message = "{message}" }
+
+[response]
+reply = "reply"

@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Optional
 
 from core.tool_recorder import ToolCall
@@ -25,7 +24,7 @@ from core.usage import Usage, track_usage
 from evaluator.customer import SimulatedCustomer
 from evaluator.outcome import Outcome, OutcomeKind
 from evaluator.scenario import Scenario
-from evaluator.target import Target, ToolCallSource
+from evaluator.target import Target, TargetOpener, ToolCallSource
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +221,7 @@ def _read_tool_calls(target: Target) -> Optional[list[ToolCall]]:
 
 
 async def run_in_isolation(
-    target_module: ModuleType,
+    target_module: TargetOpener,
     scenario: Scenario,
     *,
     default_timeout: float,
@@ -240,7 +239,7 @@ async def run_in_isolation(
     Only cancellation passes through, so that Ctrl+C still stops the program.
 
     Args:
-        target_module: A module of the `targets` package, with `open_target()`.
+        target_module: A module of the `targets` package or a target config, with `open_target()`.
         scenario: Who the customer is and what they want.
         default_timeout: Seconds the conversation may take, unless the scenario
             names a timeout of its own.
@@ -297,7 +296,7 @@ async def run_in_isolation(
 
 
 async def run_in_parallel(
-        target_module: ModuleType,
+        target_module: TargetOpener,
         scenarios: list[Scenario],
         *,
         max_parallel: int,
@@ -316,7 +315,7 @@ async def run_in_parallel(
     rate-limiting us, that stops more runs from adding to the load.
 
     Args:
-        target_module: A module of the `targets` package, with `open_target()`.
+        target_module: A module of the `targets` package or a target config, with `open_target()`.
             Each run opens its own target from it.
         scenarios: The scenarios to play.
         max_parallel: The most runs active at the same time. At least 1.
