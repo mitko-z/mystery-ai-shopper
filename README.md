@@ -8,8 +8,9 @@ Everything specific to the system under test (here a fake shop and its support a
 | Folder | What it holds |
 | --- | --- |
 | `core/` | Reusable plumbing with no domain knowledge: configuration, shared types, the Gemini agent loop (`agent_loop.py`) and the tool-call recorder (`tool_recorder.py`). |
-| `evaluator/` | The tester. A simulated customer (`customer.py`) with a persona and a secret goal chats with any `Target` (`target.py`, `http_target.py`), and `runner.py` runs a `Scenario` and records the conversation. `judge.py` judges whether the target met the expectations of a scenario, `agreement.py` compares the judge with our own verdicts, and `cli.py` is the command line for all of it (`python -m evaluator`). |
+| `evaluator/` | The tester. A simulated customer (`customer.py`) with a persona and a secret goal chats with any `Target` (`target.py`, `http_target.py`, or one read from a config file by `target_config.py`), and `runner.py` runs a `Scenario` and records the conversation. `judge.py` judges whether the target met the expectations of a scenario, `agreement.py` compares the judge with our own verdicts, and `cli.py` is the command line for all of it (`python -m evaluator`). |
 | `targets/` | One module per system under test: how to reach it and which scenarios to run against it. `targets/shop.py` is the entry for the fake shop. |
+| `target_configs/` | Target config files: a system under test that is reached over HTTP and needs no Python module (see [Test an agent over HTTP with a config file](#test-an-agent-over-http-with-a-config-file)). `shop_local.toml` is the fake shop as a server. |
 | `shop/` | The fake shop and everything that belongs to it: `store.py` and `seed.py` (the shop), `support_agent.py` (the agent's prompt and tools), `session.py` (one conversation with the agent), `app.py` (the HTTP API), `static/` (the demo page) and `tests/` (their tests). |
 
 `core` imports nothing else from this project. `shop` and `evaluator` both depend on `core` only, never on each other, so the tester can be pointed at a system that is not this shop. Only a module in `targets/` knows both a system and the evaluator. `tests/test_import_rules.py` checks these import rules, so a stray import fails the tests. The tester treats the system as a black box: all it needs is a way to send a message and get a reply.
@@ -98,12 +99,56 @@ A second AI agent plays a customer with a persona and a secret goal (here: Alex,
 
 The output differs from run to run, because both sides are language models.
 
-To test another system, add a module `targets/<name>.py` with:
+To test another system that has an HTTP chat endpoint, write a target config file and no code (see [Test an agent over HTTP with a config file](#test-an-agent-over-http-with-a-config-file)). For anything else, add a module `targets/<name>.py` with:
 
 - `open_target()`: an async context manager that yields an object with `async send(message) -> reply` (see `evaluator/target.py`). `HttpChatTarget` already covers any system with a `POST /chat` endpoint taking `conversation_id` and `message` and answering `{"reply": ...}`.
 - `SCENARIOS`: a dict of `Scenario` objects (name, persona, secret goal, message limit, timeout and written expectations). The easy way to get one is to write the scenarios in a TOML file and load it with `load_scenarios` (see [Scenario files](#scenario-files)).
 
 Then run `uv run python -m evaluator single <name> <scenario>` for one scenario, or `uv run python -m evaluator parallel <name>` for all of them. The system under test needs no changes.
+
+### Test an agent over HTTP with a config file
+
+A target config is a TOML file that says how to reach an agent's chat endpoint. With it, the tester needs no Python module:
+
+```
+uv run python -m evaluator parallel --target-config my_agent.toml --scenario-file my_scenarios.toml
+uv run python -m evaluator single --target-config my_agent.toml --scenario-file my_scenarios.toml refund_x
+```
+
+`--target-config` takes the place of the target's name, so give one or the other. A config holds no scenarios, so it needs `--scenario-file` (see [Scenario files](#scenario-files)). An example:
+
+```toml
+name = "acme-support"                   # optional, default: the file's name. Used in the results file's name
+base_url = "https://agent.example.com"
+path = "/v1/chat"                       # optional, default "/chat"
+request_timeout_seconds = 60            # optional, default 60: one HTTP request, not the whole conversation
+
+[auth]                                  # optional
+header = "Authorization"
+env = "ACME_TOKEN"                      # the environment variable that holds the secret
+prefix = "Bearer "                      # optional, put before the secret
+
+[headers]                               # optional: static headers that are not secret
+X-Client = "mystery-shopper"
+
+[request]                               # optional, default: { conversation_id = "{conversation_id}", message = "{message}" }
+body = { session = "{conversation_id}", input = { text = "{message}" } }
+
+[response]                              # optional, default "reply"
+reply = "data.messages.0.text"
+```
+
+Each message is sent as `POST <base_url><path>`, with the body as JSON. In the body, a value that is exactly `"{message}"` is replaced by what the customer wrote, and a value that is exactly `"{conversation_id}"` by the id of the run. A marker inside a longer text, such as `"shopper-{conversation_id}"`, is refused when the file is read, because it would otherwise be sent unchanged. `"{message}"` must be somewhere in the body. Every run gets a new conversation id, so runs never share a conversation. `reply` says where the agent's text is in the JSON answer: the keys from the outside in, with a number for an item of a list. So `data.messages.0.text` reads `"Hi"` from `{"data": {"messages": [{"text": "Hi"}]}}`.
+
+The secret is never in the file. It is read from the environment variable that `env` names, and it is checked before any run starts, so a missing one is a single error. It is never printed and never written to the results. The results record the config file (`settings.target_config`), and not the URL. To keep secrets out of the file, a `base_url` with a password or a query, and an `Authorization` header in `[headers]`, are refused. The auth header is not sent over plain `http://` except to this machine (`localhost`, `127.0.0.1`, `::1`). A mistake in the file, such as an unknown key or a value of the wrong type, stops the command with a message that names the file and the key.
+
+A config target is a black box: the tester sees only the replies. So its results have no `tool_calls`, and the judge works from the transcript alone (see [Expectations and the tool-call log](#expectations-and-the-tool-call-log)).
+
+What it does not do: streamed answers, a conversation id that the server hands out, endpoints that need the whole history in every request (as in the OpenAI `messages` style), and retries when the endpoint fails. An endpoint that answers with an error status fails the run.
+
+`target_configs/shop_local.toml` is the fake shop reached as a server. Start the server (`uv run fastapi dev shop/app.py`), then run `uv run python -m evaluator parallel --target-config target_configs/shop_local.toml --scenario-file scenarios/shop.toml`. The runs are the same as with `parallel shop`, except that the results have no tool log.
+
+In `single`, put the options before the target or after the scenario: `single shop refund_o1002 --max-calls 5`. With an option between them (`single shop --max-calls 5 refund_o1002`), the command line is refused, because the target may be left out.
 
 ### Scenario files
 
@@ -138,7 +183,8 @@ All scenarios of the target run at the same time, each in a conversation and a s
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--scenario-file FILE` | read the scenarios from this TOML file instead of the target's own. Repeat the option to use several files, e.g. `--scenario-file a.toml --scenario-file b.toml`. A scenario name must not be in two files. | the target's scenarios |
+| `--target-config FILE` | reach the target through this config file, instead of a module of `targets/`. Needs `--scenario-file` (see [Test an agent over HTTP with a config file](#test-an-agent-over-http-with-a-config-file)) | none |
+| `--scenario-file FILE` | read the scenarios from this TOML file instead of the target's own. Repeat the option to use several files, e.g. `--scenario-file a.toml --scenario-file b.toml`. A scenario name must not be in two files. `single` takes it too. | the target's scenarios |
 | `--max-parallel N` | the most runs active at the same time. The others wait for a free slot, and the wait does not count against their timeout. | 5 |
 | `--timeout SECONDS` | how long one conversation may take, unless its scenario has a `timeout_seconds` | 120 |
 | `--max-calls N` | the most model calls one run may make | 60 |
@@ -155,7 +201,7 @@ A run that times out or fails never stops the others, and it keeps what was said
 | Exit code | Meaning |
 | --- | --- |
 | 0 | every run finished. What the customer decided (`goal_achieved`, `gave_up`, `cut_off`) is for the judge to weigh, so it does not change the code. |
-| 1 | it could not run at all, e.g. an unknown target, a wrong scenario file, a missing API key, or a results file that cannot be written |
+| 1 | it could not run at all, e.g. an unknown target, a wrong scenario file, a wrong target config, a missing API key or target secret, or a results file that cannot be written |
 | 2 | the command line is wrong (argparse) |
 | 3 | it ran and wrote the file, but at least one run failed or timed out. This is also what a wrong API key looks like, because the key is only checked to be set: every run fails. |
 | 130 | interrupted with Ctrl+C |
